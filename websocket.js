@@ -1,17 +1,14 @@
-#!/usr/bin/env node
-
-import koa from "koa";
-import serve from "koa-static";
 import WebSocket, { WebSocketServer } from "ws";
 import Datastore from "@seald-io/nedb";
+
+const allowedOrigins = ["https://pumpkinmuffin.local", "http://localhost:8888", "https://192.168.59.251", "https://send.to.computer"];
 
 const messagesWss = new WebSocketServer({
   noServer: true,
   path: "/socket/"
 });
-const app = new koa();
+
 const invalidUsernameReg = /[^\w ]/;
-const allowedOrigins = ["https://pumpkinmuffin.local", "http://localhost:8888", "https://192.168.59.251", "https://send.to.computer"];
 
 function isUsernameUnique(name) {
   return !Array.from(messagesWss.clients).some(el => el.username === name);
@@ -61,12 +58,6 @@ const db = {
   users: new Datastore({ filename: "data/users.db", autoload: true }),
   groups: new Datastore({ filename: "data/groups.db", autoload: true }),
 }
-
-app.use(serve("static"));
-
-app.use((_req, res, _next) => {
-  res.status(404).send("The page you are looking for does not exist");
-});
 
 messagesWss.on("connection", conn => {
   conn.on("message", async data => {
@@ -196,8 +187,9 @@ messagesWss.on("connection", conn => {
   });
 });
 
-const server = app.listen(8888, () => console.log("Listenining on port 8888!"));
-server.on("upgrade", (req, socket, head) => {
-  if (allowedOrigins.includes(req.headers.origin) && req.url === "/socket/")
-    messagesWss.handleUpgrade(req, socket, head, websocket => messagesWss.emit("connection", websocket, req));
-});
+export default function (server) {
+  server.on("upgrade", (req, socket, head) => {
+    if (allowedOrigins.includes(req.headers.origin) && req.url === "/socket/")
+      messagesWss.handleUpgrade(req, socket, head, websocket => messagesWss.emit("connection", websocket, req));
+  });
+}
