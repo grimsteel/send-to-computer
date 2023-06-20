@@ -1,0 +1,4 @@
+data/
+node_modules/
+stc.service
+/messages.db

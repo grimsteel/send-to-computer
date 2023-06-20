@@ -1,0 +1,22 @@
+{
+  "name": "send-to-computer",
+  "version": "1.0.0",
+  "description": "Send messages across the network to a computer",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build-css": "sass -s compressed --no-source-map bootstrap-styles.scss static/bootstrap.min.css",
+    "build-js": "esbuild bootstrap-modules.js --format=esm --bundle --minify --outfile=static/bootstrap.esm.min.js"
+  },
+  "author": "Siddhant Kameswar",
+  "license": "ISC",
+  "main": "app.js",
+  "dependencies": {
+    "@seald-io/nedb": "^4.0.2",
+    "bootstrap": "^5.3.0",
+    "esbuild": "^0.18.4",
+    "koa": "^2.14.2",
+    "koa-static": "^5.0.0",
+    "ws": "^8.13.0"
+  },
+  "type": "module"
+}

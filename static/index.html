@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en-US" class="h-100" data-bs-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <title>Send to Computer</title>
+    <link rel="stylesheet" href="bootstrap.min.css"/>
+    <link rel="icon" href="favicon.ico" />
+    <style>
+      .box-shadow-none {
+        box-shadow: none !important;
+      }
+      .z-2 {
+        z-index: 2;
+      }
+      #messages-container {
+        overflow-y: auto;
+        height: 0;
+      }
+      .bg-dark-subtle-not-hovered:not(:hover) {
+        background-color: var(--bs-dark-bg-subtle);
+      }
+      [v-cloak] {
+        display: none !important;
+      }
+      .small {
+        font-size: 0.875em !important;
+      }
+      .bi {
+        width: 1em;
+        height: 1em;
+        vertical-align: -0.125em;
+        fill: currentcolor;
+      }
+      .alert-offline {
+        display: flex;
+      }
+      .group-actions {
+        padding-left: 0.75rem;
+      }
+      .group-actions > button {
+        display: inline;
+      }
+    </style>
+  </head>
+  <body class="d-flex flex-column h-100 position-relative" @vue:mounted="autoLogin" v-effect="localStorage.setItem('username', store.username);" v-cloak v-scope>
+    <!-- header -->
+    <div class="bg-dark-subtle d-flex align-items-center justify-content-between p-3 border-bottom">
+      <h1 class="d-inline h2 mb-0">Send to Computer</h1>
+      <div class="alert alert-warning alert-offline align-items-center m-0 py-2" role="alert" v-show="!store.isOnline">
+        <svg xmlns="http://www.w3.org/2000/svg" class="bi flex-shrink-0 me-2" viewBox="0 0 16 16" role="img" aria-label="Warning:">
+          <path d="M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"/>
+        </svg>
+        <div>
+          Offline
+        </div>
+      </div>
+      <button type="button" class="btn btn-link" v-show="isOnPage('chat')" @click="logout">Log Out</button>
+    </div>
+    
+    <!-- login page -->
+    <div v-show="isOnPage('login')" class="p-3">
+      <form @submit.prevent="login">
+        <div class="input-group">
+          <input type="text" class="form-control" placeholder="Username" v-model="store.username" id="input-register" required pattern="[\w ]+"/>
+          <button class="btn btn-success" type="submit">Log In</button>
+        </div>
+        <div id="passwordHelpBlock" class="form-text">Alphanumeric characters and spaces only</div>
+      </form>
+    </div>
+    
+    <!-- main chat page -->
+    <div class="flex-fill row g-3 w-100" v-show="isOnPage('chat')">
+      <!-- sidebar -->
+      <div class="col-3 bg-dark-subtle p-3">
+        <p>Logged in as: <strong>{{ store.username }}</strong></p>
+        
+        <!-- users -->
+        <h2 class="h4">Users:</h2>
+        <button
+          v-for="(user, i) in store.users"
+          :key="i"
+          :class="{ 'border-bottom-0': i === store.users.length - 1 }"
+          class="d-flex py-2 align-items-center btn rounded-0 btn-dark bg-dark-subtle-not-hovered w-100 border-top-0 border-start-0 border-end-0 border-bottom"
+          @click="setCurrentUser(user.username)"
+          >
+          <span :class="{ 'fw-bold': user.online }">{{ user.username }}</span>
+          <span v-show="user.online" class="rounded-circle p-1 bg-success ms-auto"></span>
+        </button>
+        <button class="btn btn-secondary mt-2" type="button" @click="openAddUserModal" v-show="store.isOnline">Add User</button>
+        
+        <!-- groups -->
+        <h2 class="h4 mt-2">Groups:</h2>
+        <div
+          v-for="(group, i) in store.groups"
+          :key="group._id"
+          :class="{ 'border-bottom-0': i === store.groups.length - 1 }"
+          class="border-bottom"
+          @click="setCurrentGroup(group._id)"
+          >
+          <button class="pb-0 pt-2 text-start btn rounded-0 btn-dark bg-dark-subtle-not-hovered w-100 border-0">
+            <span>{{ group.name }}</span>
+            <small class="text-muted d-inline-block text-truncate w-100 lh-1">{{ group.members.join(", ") }}</small>
+          </button>
+          <div class="pb-2 group-actions">
+            <button class="btn btn-link link-warning p-0 border-0 me-2 small" type="button" @click="openEditGroupModal(group._id)" v-show="store.isOnline">Edit</button>
+            <button class="btn btn-link link-danger p-0 border-0 small" type="button" @click="deleteGroup(group._id)" v-show="store.isOnline">Delete</button>
+          </div>
+        </div>
+        <button class="btn btn-secondary mt-2" type="button" @click="openCreateGroupModal" v-show="store.isOnline">Create Group</button>
+      </div>
+      
+      <!-- chat -->
+      <div class="col-9 d-flex flex-column p-3" v-if="store.currentChatName">
+        <h2 class="h3">{{ store.currentChatName }}:</h2>
+        <div id="messages-container" class="flex-fill">
+          <div v-for="message in store.currentMessages" :key="message._id" class="d-flex flex-row justify-content-between">
+            <div>
+              <p class="mt-1 mb-0">
+                <strong>{{ message.sender }}:</strong>
+                <span>{{ message.message }}</span>
+              </p>
+              <p class="text-muted mt-0 mb-1">
+                <small>{{ new Date(message.createdAt).toLocaleString() }}</small>
+              </p>
+            </div>
+            <div style="white-space: nowrap">
+              <button
+                class="btn-link btn link-success border-0 box-shadow-none p-0 m-0 me-2"
+                type="button"
+                @click="navigator.clipboard.writeText(message.message)">
+                Copy
+              </button>
+              <button
+                class="btn-link btn link-danger border-0 box-shadow-none p-0 m-0 me-2"
+                type="button"
+                v-show="store.isOnline"
+                @click="deleteMessage(message._id)">
+                Delete
+              </button>
+            </div>
+          </div>
+          <p v-show="store.currentMessages.length < 1">No messages yet</p>
+        </div>
+        
+        <!-- sending messages -->
+        <form class="input-group" @submit.prevent="sendMessage" v-show="store.isOnline">
+          <input type="text" class="form-control" placeholder="Message" id="input-message" v-model="store.message" required />
+          <button class="btn btn-primary">Send</button>
+        </form>
+      </div>
+      <div class="col-9 d-flex align-items-center justify-content-center" v-else>
+        <p class="h4">Select a user or a group to send a message</p>
+      </div>
+    </div>
+    
+    <!-- modals -->
+    <div class="modal" id="edit-group-modal" tabindex="-1" v-effect="store.editGroupModal.show ? editGroupModal.show() : editGroupModal.hide()">
+      <div class="modal-dialog modal-dialog-centered">
+        <form class="modal-content" @submit.prevent="onEditGroupModalSubmit">
+          <div class="modal-header">
+            <h5 class="modal-title">{{ store.editGroupModal.state === 'edit' ? "Edit" : "Create" }} group:</h5>
+            <button type="button" class="btn-close" @click="store.editGroupModal.show = false"></button>
+          </div>
+          <div class="modal-body">
+            <label for="input-group-name" class="form-label">Name</label>
+            <input type="text" class="form-control mb-3" id="input-group-name" required v-model="store.editGroupModal.name" />
+            <label class="form-label">Members</label>
+            <div class="input-group mb-2" v-for="(item, i) in store.editGroupModal.members">
+              <input type="text" class="form-control" :value="item" @change="store.editGroupModal.members[i] = $el.value" required>
+              <button class="btn btn-outline-danger" type="button" @click="store.editGroupModal.members.splice(i, 1)">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" class="bi">
+                  <path d="M2.5 1a1 1 0 0 0-1 1v1a1 1 0 0 0 1 1H3v9a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V4h.5a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H10a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1H2.5zm3 4a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-1 0v-7a.5.5 0 0 1 .5-.5zM8 5a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-1 0v-7A.5.5 0 0 1 8 5zm3 .5v7a.5.5 0 0 1-1 0v-7a.5.5 0 0 1 1 0z"/>
+                </svg>
+              </button>
+            </div>
+            <button type="button" class="btn btn-outline-secondary" @click="store.editGroupModal.members.push('')">Add Member</button>
+          </div>
+          <div class="modal-footer">
+            <button type="submit" class="btn btn-success">{{ store.editGroupModal.state === 'edit' ? "Save" : "Create Group" }}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+    <div class="modal" id="add-user-modal" tabindex="-1" v-effect="store.addUserModal.show ? addUserModal.show() : addUserModal.hide()">
+      <div class="modal-dialog modal-dialog-centered">
+        <form class="modal-content" @submit.prevent="onAddUserModalSubmit">
+          <div class="modal-header">
+            <h5 class="modal-title">Add user:</h5>
+            <button type="button" class="btn-close" @click="store.addUserModal.show = false"></button>
+          </div>
+          <div class="modal-body">
+            <label for="input-add-user-name" class="form-label">Username</label>
+            <input type="text" class="form-control mb-3" id="input-add-user-name" required v-model="store.addUserModal.username" />
+          </div>
+          <div class="modal-footer">
+            <button type="submit" class="btn btn-success">Add User</button>
+          </div>
+        </form>
+      </div>
+    </div>
+    
+    <!-- toasts -->
+    <div class="toast position-absolute top-0 start-0 m-3" role="alert" aria-live="assertive" aria-atomic="true" id="disconnected-toast">
+      <div class="toast-header">
+        <span class="bg-danger me-2 ps-4 pt-4 rounded"></span>
+        <strong class="me-auto">Error</strong>
+        <button type="button" class="btn-close" aria-label="Close" @click="store.showDisconnectedToast = false"></button>
+      </div>
+      <div class="toast-body">Disconnected from server</div>
+    </div>
+    <div class="toast position-absolute top-0 start-0 m-3" role="alert" aria-live="assertive" aria-atomic="true" id="username-taken-toast">
+      <div class="toast-header">
+        <span class="bg-danger me-2 ps-4 pt-4 rounded"></span>
+        <strong class="me-auto">Invalid username</strong>
+        <button type="button" class="btn-close" aria-label="Close" @click="store.showUsernameTakenToast = false"></button>
+      </div>
+      <div class="toast-body">That username is already taken</div>
+    </div>
+    <script type="module">
+      import { Modal, Toast } from "./bootstrap.esm.min.js";
+      import { createApp, reactive } from './petite-vue.es.js'
+      let connection = null;
+      const addUserModal = new Modal("#add-user-modal");
+      const editGroupModal = new Modal("#edit-group-modal");
+      const disconnectedToast = new Toast("#disconnected-toast");
+      const usernameTakenToast = new Toast("#username-taken-toast");
+      /*const inputMessage = document.getElementById("input-message");
+      const inputOfflineName = document.getElementById("input-offline-name");
+      const offlineUserModalEl = document.getElementById("offline-user-modal");
+      const offlineUserModal = new Modal('#offline-user-modal');
+      const newGroupModalEl = document.getElementById("new-group-modal");
+      const newGroupModal = new Modal('#new-group-modal');
+      const inputGroupName = document.getElementById("input-group-name");
+      const inputGroupMembers = document.getElementById("input-group-members");
+      const editGroupModalEl = document.getElementById("edit-group-modal");
+      const editGroupModal = new Modal('#edit-group-modal');
+      const inputEditGroupMembers = document.getElementById("input-edit-group-members");*/
+      
+      const PAGES = {
+        login: 0,
+        chat: 1
+      };
+      
+      const socketUrl = `ws${location.protocol.replace("http", "")}//${location.host + location.pathname}socket/`;
+      
+      const store = reactive({
+        page: PAGES.login,
+        username: localStorage.getItem("username") || "",
+        users: [],
+        getUser(findUsername) {
+          return this.users.find(({ username }) => findUsername === username);
+        },
+        setOnlineStatus(username, online) {
+          const existingUser = this.getUser(username);
+          if (existingUser) existingUser.online = online;
+          else this.users.push({ username, online });
+        },
+        groups: [],
+        getGroup(id) {
+          return this.groups.find(({ _id }) => _id === id);
+        },
+        addUpdateGroup(group) {
+          const existingGroup = this.getGroup(group._id);
+          if (existingGroup) {
+            existingGroup.name = group.name;
+            existingGroup.members = group.members;
+          } else this.groups.push(group);
+        },
+        removeGroup(groupId) {
+          this.groups = this.groups.filter(({ _id }) => _id !== groupId);
+          if (groupId === this.currentGroup) this.currentGroup = null;
+        },
+        messages: [],
+        addMessage(message) {
+          this.messages.push(message);
+        },
+        removeMessage(messageId) {
+          this.messages = this.messages.filter(({ _id }) => _id !== messageId);
+        },
+        message: "",
+        get currentMessages() {
+          return this.messages.filter(({ sender, receivingUser, receivingGroup }) => {
+            // If sender (always a person, not a group) equals current selected user we're in DMs so only show if sending to a user
+            if (sender === this.currentUser && receivingUser) return true;
+            // If sent by us always show. Two cases - we sent to a user or we sent to a group
+            if (receivingUser === this.currentUser || receivingGroup === this.currentGroup) return true;
+            return false;
+          });
+        },
+        get currentChatName() {
+          if (this.currentUser) return this.currentUser;
+          if (this.currentGroup) return this.getGroup(this.currentGroup)?.name || this.currentGroup;
+          return null;
+        },
+        isOnline: true,
+        currentUser: null, // username
+        currentGroup: null, // group ID
+        editGroupModal: {
+          show: false,
+          members: [],
+          state: "create",
+          name: "",
+          id: null
+        },
+        addUserModal: {
+          show: false,
+          username: ""
+        },
+        get showDisconnectedToast() { return disconnectedToast.isShown; },
+        set showDisconnectedToast(show) {
+          if (show) disconnectedToast.show();
+          else disconnectedToast.hide();
+        },
+        get showUsernameTakenToast() { return usernameTakenToast.isShown; },
+        set showUsernameTakenToast(show) {
+          if (show) usernameTakenToast.show();
+          else usernameTakenToast.hide();
+        }
+      });
+
+      createApp({
+        store,
+        editGroupModal,
+        addUserModal,
+        isOnPage(page) {
+          return this.store.page === PAGES[page]
+        },
+        autoLogin() {
+          if (this.store.username) this.login();
+        },
+        login() {
+          if (this.store.page === PAGES.chat) return alert("Already logged in!"); // this should never happen
+          if (document.getElementById("input-register").reportValidity()) {
+            if (connection) connection.send(JSON.stringify({type: "username", username: store.username}))
+            else {
+              connection = new WebSocket(socketUrl, "json");
+              connection.onopen = () => connection.send(JSON.stringify({type: "username", username: store.username}));
+              connection.onmessage = event => {
+                let msg = JSON.parse(event.data);
+                switch(msg.type) {
+                  case "invalid-username":
+                    store.showUsernameTakenToast = true;
+                    break;
+                  case "logged-in":
+                    this.store.messages = msg.history;
+                    this.store.users = msg.users;
+                    this.store.groups = msg.groups;
+                    this.store.page = PAGES.chat;
+                    break;
+                  case "new-user":
+                    this.store.setOnlineStatus(msg.username, true);
+                    break;
+                  case "removed-from-group":
+                    this.store.removeGroup(msg.id);
+                    break;
+                  case "update-group":
+                    this.store.addUpdateGroup(msg.group);
+                    break;
+                  case "user-disconnect":
+                    this.store.setOnlineStatus(msg.username, false);
+                    break;
+                  case "receive-message":
+                    this.store.addMessage(msg.message);
+                    this.scrollMessages();
+                    break;
+                  case "remove-message":
+                    this.store.removeMessage(msg.id)
+                    break;
+                }
+              };
+              connection.onerror = event => {
+                if (event.target.readyState === WebSocket.CLOSED) this.onDisconnect();
+              };
+              connection.onclose = event => this.onDisconnect();
+            }
+          }
+        },
+        logout() {
+          this.store.username = "";
+          location.reload();
+        },
+        sendMessage() {
+          if (document.getElementById("input-message").reportValidity()) {
+            if (this.store.currentUser)
+              connection.send(JSON.stringify({type: "send-message", receipient: this.store.currentUser, message: this.store.message}));
+            else if (this.store.currentGroup)
+              connection.send(JSON.stringify({type: "send-group-message", id: this.store.currentGroup, message: this.store.message}));
+            this.store.message = "";
+          }
+        },
+        deleteMessage(messageId) {
+          connection.send(JSON.stringify({ type: "delete-message", id: messageId }));
+        },
+        deleteGroup(groupId) {
+          connection.send(JSON.stringify({ type: "delete-group", id: groupId }));
+        },
+        scrollMessages() {
+          this.$nextTick(() => document.querySelector("#messages-container > :nth-last-child(2)")?.scrollIntoView({ behavior: "smooth" }));
+        },
+        setCurrentUser(username) {
+          this.store.currentUser = username;
+          this.store.currentGroup = null;
+          this.scrollMessages();
+        },
+        setCurrentGroup(groupId) {
+          this.store.currentUser = null;
+          this.store.currentGroup = groupId;
+          this.scrollMessages();
+        },
+        openAddUserModal() {
+          this.store.addUserModal.username = "";
+          this.store.addUserModal.show = true;
+        },
+        openCreateGroupModal() {
+          this.store.editGroupModal.members = [""];
+          this.store.editGroupModal.state = "create";
+          this.store.editGroupModal.name = "";
+          this.store.editGroupModal.id = null;
+          this.store.editGroupModal.show = true;
+        },
+        openEditGroupModal(groupId) {
+          const group = this.store.getGroup(groupId);
+          if (!group) return;
+          this.store.editGroupModal.members = [...group.members];
+          this.store.editGroupModal.state = "edit";
+          this.store.editGroupModal.name = group.name;
+          this.store.editGroupModal.id = groupId;
+          this.store.editGroupModal.show = true;
+        },
+        onAddUserModalSubmit() {
+          this.store.setOnlineStatus(this.store.addUserModal.username, false);
+          this.setCurrentUser(this.store.addUserModal.username);
+          this.store.addUserModal.show = false;
+        },
+        onEditGroupModalSubmit() {
+          if (this.store.editGroupModal.state === "edit") {
+            const oldGroup = this.store.getGroup(this.store.editGroupModal.id);
+            connection.send(JSON.stringify({
+              type: "edit-group",
+              name: this.store.editGroupModal.name,
+              newMembers: this.store.editGroupModal.members,
+              oldMembers: oldGroup.members,
+              id: this.store.editGroupModal.id
+            }));
+          } else {
+            connection.send(JSON.stringify({
+              type: "create-group",
+              name: this.store.editGroupModal.name,
+              members: this.store.editGroupModal.members,
+            }));
+          }
+          this.store.editGroupModal.show = false;
+        },
+        onDisconnect() {
+          this.store.showDisconnectedToast = true;
+          this.store.isOnline = false;
+          connection = null;
+        }
+      }).mount("body");            
+ 
+      
+      /*function createMessage({sender, message, id}, atTop=false) {
+        let msgEl = document.createElement("p")
+        let msgCont = msgEl.appendChild(document.createElement("div"));
+        msgCont.appendChild(document.createElement("strong")).innerText = sender;
+        msgCont.appendChild(document.createElement("span")).innerText = message;
+        msgEl.classList.add("d-flex", "flex-row", "justify-content-between");
+        msgEl.dataset.id = id;
+        let msgButtons = msgEl.appendChild(document.createElement("div"));
+        msgButtons.style.whiteSpace = "nowrap";
+        let copyButton = msgButtons.appendChild(document.createElement("button"));
+        copyButton.innerText = "Copy";
+        copyButton.classList.add("btn-link", "btn", "link-success", "border-0", "box-shadow-none", "p-0", "m-0", "me-2");
+        copyButton.type = "button";
+        copyButton.addEventListener("click", () => navigator.clipboard.writeText(message));
+        let deleteButton = msgButtons.appendChild(document.createElement("button"));
+        deleteButton.innerText = "Delete";
+        deleteButton.classList.add("btn-link", "btn", "border-0", "box-shadow-none", "p-0", "m-0");
+        deleteButton.type = "button";
+        deleteButton.addEventListener("click", () => {
+          connection.send(JSON.stringify({type: "delete-message", id}));
+          msgEl.remove();
+        });
+        if (atTop) document.getElementById("message-container").insertBefore(msgEl, document.getElementById("message-container").firstElementChild);
+        else document.getElementById("message-container").appendChild(msgEl);
+      }
+      
+      function createSendButton(username) {
+        let btn = document.getElementById("users-list").insertBefore(document.createElement("button"), document.getElementById("open-offline-dialog"));
+        btn.classList.add("list-group-item", "list-group-item-action");
+        btn.type = "button";
+        btn.innerText = username;
+        btn.dataset.type = "user";
+        btn.addEventListener("click", () => {
+          if (inputMessage.reportValidity()) {
+            connection.send(JSON.stringify({type: "send-message", receipient: username, message: inputMessage.value}));
+            inputMessage.value = "";
+          }
+        });
+      }
+      
+      function createGroupButton({name, id, members}) {
+        let btn = document.getElementById("users-list").insertBefore(document.createElement("li"), document.getElementById("add-group"));
+        btn.classList.add("list-group-item", "list-group-item-action");
+        btn.type = "button";
+        let msgBtn = btn.appendChild(document.createElement("button"))
+        msgBtn.innerText = name;
+        msgBtn.classList.add("btn", "p-0", "border-0", "stretched-link");
+        btn.appendChild(document.createElement("span")).innerText = JSON.parse(members).join(", ");
+        btn.lastElementChild.classList.add("text-muted", "small", "ms-1");
+        let editEl = btn.appendChild(document.createElement("button"));
+        editEl.classList.add("btn", "btn-link", "link-secondary", "py-0", "border-0", "position-absolute", "box-shadow-none", "px-3", "top-0", "end-0", "h-100", "z-2");
+        editEl.innerText = "Edit";
+        editEl.addEventListener("click", () => {
+          editGroupModal.currentEditingId = id;
+          editGroupModal.initialMembers = JSON.parse(members);
+          inputEditGroupMembers.value = JSON.parse(members).join(",");
+          editGroupModal.show();
+        });
+        btn.id = `btn-group-${id}`;
+        msgBtn.addEventListener("click", () => {
+          if (inputMessage.reportValidity()) {
+            connection.send(JSON.stringify({type: "send-group-message", id, message: inputMessage.value}));
+            inputMessage.value = "";
+          }
+        });
+      }
+      
+      document.getElementById("btn-register").addEventListener("click", login);      
+      offlineUserModalEl.addEventListener('shown.bs.modal', () => inputOfflineName.focus());
+      offlineUserModalEl.addEventListener('hidden.bs.modal', () => inputOfflineName.value = "");
+      newGroupModalEl.addEventListener('shown.bs.modal', () => inputGroupName.focus());
+      newGroupModalEl.addEventListener('hidden.bs.modal', () => {
+        inputGroupName.value = "";
+        inputGroupMembers.value = "";
+      });
+      editGroupModalEl.addEventListener('shown.bs.modal', () => inputEditGroupMembers.focus());
+      editGroupModalEl.addEventListener('hidden.bs.modal', () => {
+        editGroupModal.currentEditingId = null;
+        editGroupModal.initialMembers = null;
+      });
+      document.getElementById("open-offline-dialog").addEventListener("click", () => {
+        if (inputMessage.reportValidity()) offlineUserModal.show();
+      });
+      document.getElementById("add-group").addEventListener("click", () => newGroupModal.show());
+      document.getElementById("btn-send-offline-msg").addEventListener("click", () => {
+        if (inputOfflineName.reportValidity()) {
+          connection.send(JSON.stringify({type: "send-message", receipient: inputOfflineName.value, message: inputMessage.value}));
+          offlineUserModal.hide();
+        }
+      });
+      document.getElementById("btn-create-group").addEventListener("click", () => {
+        if (inputGroupName.reportValidity() && inputGroupMembers.reportValidity()) {
+          let groupMembers = inputGroupMembers.value.split(",");
+          connection.send(JSON.stringify({type: "create-group", name: inputGroupName.value, members: groupMembers}));
+          newGroupModal.hide();
+        }
+      });
+      document.getElementById("btn-logout").addEventListener("click", () => {
+        localStorage.removeItem("username");
+        location.reload();
+      });
+      document.getElementById("btn-delete-group").addEventListener("click", () => {
+        connection.send(JSON.stringify({type: "delete-group", id: editGroupModal.currentEditingId}));
+        editGroupModal.hide();
+      });
+      document.getElementById("btn-save-edited-group").addEventListener("click", () => {
+        if (inputEditGroupMembers.reportValidity()) {
+          let newMembers = inputEditGroupMembers.value.split(",");
+          connection.send(JSON.stringify({type: "edit-group-members", newMembers, oldMembers: editGroupModal.initialMembers, id: editGroupModal.currentEditingId}));
+          editGroupModal.hide();
+        }
+      });*/
+    </script>
+  </body>
+</html>
