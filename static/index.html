@@ -224,17 +224,6 @@
       const editGroupModal = new Modal("#edit-group-modal");
       const disconnectedToast = new Toast("#disconnected-toast");
       const usernameTakenToast = new Toast("#username-taken-toast");
-      /*const inputMessage = document.getElementById("input-message");
-      const inputOfflineName = document.getElementById("input-offline-name");
-      const offlineUserModalEl = document.getElementById("offline-user-modal");
-      const offlineUserModal = new Modal('#offline-user-modal');
-      const newGroupModalEl = document.getElementById("new-group-modal");
-      const newGroupModal = new Modal('#new-group-modal');
-      const inputGroupName = document.getElementById("input-group-name");
-      const inputGroupMembers = document.getElementById("input-group-members");
-      const editGroupModalEl = document.getElementById("edit-group-modal");
-      const editGroupModal = new Modal('#edit-group-modal');
-      const inputEditGroupMembers = document.getElementById("input-edit-group-members");*/
       
       const PAGES = {
         login: 0,
@@ -456,121 +445,7 @@
           this.store.isOnline = false;
           connection = null;
         }
-      }).mount("body");            
- 
-      
-      /*function createMessage({sender, message, id}, atTop=false) {
-        let msgEl = document.createElement("p")
-        let msgCont = msgEl.appendChild(document.createElement("div"));
-        msgCont.appendChild(document.createElement("strong")).innerText = sender;
-        msgCont.appendChild(document.createElement("span")).innerText = message;
-        msgEl.classList.add("d-flex", "flex-row", "justify-content-between");
-        msgEl.dataset.id = id;
-        let msgButtons = msgEl.appendChild(document.createElement("div"));
-        msgButtons.style.whiteSpace = "nowrap";
-        let copyButton = msgButtons.appendChild(document.createElement("button"));
-        copyButton.innerText = "Copy";
-        copyButton.classList.add("btn-link", "btn", "link-success", "border-0", "box-shadow-none", "p-0", "m-0", "me-2");
-        copyButton.type = "button";
-        copyButton.addEventListener("click", () => navigator.clipboard.writeText(message));
-        let deleteButton = msgButtons.appendChild(document.createElement("button"));
-        deleteButton.innerText = "Delete";
-        deleteButton.classList.add("btn-link", "btn", "border-0", "box-shadow-none", "p-0", "m-0");
-        deleteButton.type = "button";
-        deleteButton.addEventListener("click", () => {
-          connection.send(JSON.stringify({type: "delete-message", id}));
-          msgEl.remove();
-        });
-        if (atTop) document.getElementById("message-container").insertBefore(msgEl, document.getElementById("message-container").firstElementChild);
-        else document.getElementById("message-container").appendChild(msgEl);
-      }
-      
-      function createSendButton(username) {
-        let btn = document.getElementById("users-list").insertBefore(document.createElement("button"), document.getElementById("open-offline-dialog"));
-        btn.classList.add("list-group-item", "list-group-item-action");
-        btn.type = "button";
-        btn.innerText = username;
-        btn.dataset.type = "user";
-        btn.addEventListener("click", () => {
-          if (inputMessage.reportValidity()) {
-            connection.send(JSON.stringify({type: "send-message", receipient: username, message: inputMessage.value}));
-            inputMessage.value = "";
-          }
-        });
-      }
-      
-      function createGroupButton({name, id, members}) {
-        let btn = document.getElementById("users-list").insertBefore(document.createElement("li"), document.getElementById("add-group"));
-        btn.classList.add("list-group-item", "list-group-item-action");
-        btn.type = "button";
-        let msgBtn = btn.appendChild(document.createElement("button"))
-        msgBtn.innerText = name;
-        msgBtn.classList.add("btn", "p-0", "border-0", "stretched-link");
-        btn.appendChild(document.createElement("span")).innerText = JSON.parse(members).join(", ");
-        btn.lastElementChild.classList.add("text-muted", "small", "ms-1");
-        let editEl = btn.appendChild(document.createElement("button"));
-        editEl.classList.add("btn", "btn-link", "link-secondary", "py-0", "border-0", "position-absolute", "box-shadow-none", "px-3", "top-0", "end-0", "h-100", "z-2");
-        editEl.innerText = "Edit";
-        editEl.addEventListener("click", () => {
-          editGroupModal.currentEditingId = id;
-          editGroupModal.initialMembers = JSON.parse(members);
-          inputEditGroupMembers.value = JSON.parse(members).join(",");
-          editGroupModal.show();
-        });
-        btn.id = `btn-group-${id}`;
-        msgBtn.addEventListener("click", () => {
-          if (inputMessage.reportValidity()) {
-            connection.send(JSON.stringify({type: "send-group-message", id, message: inputMessage.value}));
-            inputMessage.value = "";
-          }
-        });
-      }
-      
-      document.getElementById("btn-register").addEventListener("click", login);      
-      offlineUserModalEl.addEventListener('shown.bs.modal', () => inputOfflineName.focus());
-      offlineUserModalEl.addEventListener('hidden.bs.modal', () => inputOfflineName.value = "");
-      newGroupModalEl.addEventListener('shown.bs.modal', () => inputGroupName.focus());
-      newGroupModalEl.addEventListener('hidden.bs.modal', () => {
-        inputGroupName.value = "";
-        inputGroupMembers.value = "";
-      });
-      editGroupModalEl.addEventListener('shown.bs.modal', () => inputEditGroupMembers.focus());
-      editGroupModalEl.addEventListener('hidden.bs.modal', () => {
-        editGroupModal.currentEditingId = null;
-        editGroupModal.initialMembers = null;
-      });
-      document.getElementById("open-offline-dialog").addEventListener("click", () => {
-        if (inputMessage.reportValidity()) offlineUserModal.show();
-      });
-      document.getElementById("add-group").addEventListener("click", () => newGroupModal.show());
-      document.getElementById("btn-send-offline-msg").addEventListener("click", () => {
-        if (inputOfflineName.reportValidity()) {
-          connection.send(JSON.stringify({type: "send-message", receipient: inputOfflineName.value, message: inputMessage.value}));
-          offlineUserModal.hide();
-        }
-      });
-      document.getElementById("btn-create-group").addEventListener("click", () => {
-        if (inputGroupName.reportValidity() && inputGroupMembers.reportValidity()) {
-          let groupMembers = inputGroupMembers.value.split(",");
-          connection.send(JSON.stringify({type: "create-group", name: inputGroupName.value, members: groupMembers}));
-          newGroupModal.hide();
-        }
-      });
-      document.getElementById("btn-logout").addEventListener("click", () => {
-        localStorage.removeItem("username");
-        location.reload();
-      });
-      document.getElementById("btn-delete-group").addEventListener("click", () => {
-        connection.send(JSON.stringify({type: "delete-group", id: editGroupModal.currentEditingId}));
-        editGroupModal.hide();
-      });
-      document.getElementById("btn-save-edited-group").addEventListener("click", () => {
-        if (inputEditGroupMembers.reportValidity()) {
-          let newMembers = inputEditGroupMembers.value.split(",");
-          connection.send(JSON.stringify({type: "edit-group-members", newMembers, oldMembers: editGroupModal.initialMembers, id: editGroupModal.currentEditingId}));
-          editGroupModal.hide();
-        }
-      });*/
+      }).mount("body");
     </script>
   </body>
 </html>
