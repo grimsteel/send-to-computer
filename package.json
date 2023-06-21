@@ -11,6 +11,7 @@
   "author": "Siddhant Kameswar",
   "license": "ISC",
   "main": "app.js",
+  "type": "module",
   "dependencies": {
     "@seald-io/nedb": "^4.0.2",
     "ws": "^8.13.0"
