@@ -114,8 +114,8 @@
         <h2 class="h3">{{ store.currentChatName }}:</h2>
         <div id="messages-container" class="flex-fill">
           <div v-for="message in store.currentMessages" :key="message._id" class="d-flex flex-row justify-content-between">
-            <div>
-              <p class="mt-1 mb-0">
+            <div style="min-width: 0">
+              <p class="mt-1 mb-0 text-break">
                 <strong>{{ message.sender }}:</strong>
                 <span>{{ message.message }}</span>
               </p>
@@ -335,6 +335,7 @@
                     this.store.users = msg.users;
                     this.store.groups = msg.groups;
                     this.store.page = PAGES.chat;
+                    this.store.isOnline = true;
                     break;
                   case "new-user":
                     this.store.setOnlineStatus(msg.username, true);
