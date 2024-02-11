@@ -5,6 +5,9 @@
     <title>Send to Computer</title>
     <link rel="stylesheet" href="bootstrap.min.css"/>
     <link rel="icon" href="favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#FF5722" />
+    <link rel="manifest" href="app.webmanifest" />
     <style>
       .box-shadow-none {
         box-shadow: none !important;
@@ -40,6 +43,14 @@
       .group-actions > button {
         display: inline;
       }
+      span[contenteditable] {
+        outline: 0;
+      }
+      @media (max-width: 768px) {
+        #sidebar {
+          position: absolute;
+        }
+      }
     </style>
   </head>
   <body class="d-flex flex-column h-100 position-relative" @vue:mounted="autoLogin" v-effect="localStorage.setItem('username', store.username);" v-cloak v-scope>
@@ -69,9 +80,10 @@
     </div>
     
     <!-- main chat page -->
-    <div class="flex-fill row g-3 w-100" v-show="isOnPage('chat')">
+    <div class="flex-fill position-relative flex-column flex-md-row row g-3 w-100 mx-0" v-show="isOnPage('chat')">
+      <button type="button" class="d-md-none btn btn-outline-secondary rounded-0" @click="store.mobileExpanded = !store.mobileExpanded">Select user/group...</button>
       <!-- sidebar -->
-      <div class="col-3 bg-dark-subtle p-3">
+      <div class="col-md-3 bg-dark-subtle p-3 z-3 d-md-block" :class="{ 'd-none': !store.mobileExpanded }" id="sidebar">
         <p>Logged in as: <strong>{{ store.username }}</strong></p>
         
         <!-- users -->
@@ -110,17 +122,24 @@
       </div>
       
       <!-- chat -->
-      <div class="col-9 d-flex flex-column p-3" v-if="store.currentChatName">
+      <div class="col-md-9 flex-grow-1 pt-0 mt-4 d-flex flex-column p-3" v-if="store.currentChatName">
         <h2 class="h3">{{ store.currentChatName }}:</h2>
+        <div class="d-flex align-items-center gap-3 mb-2">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" role="switch" id="check-edit-mode" v-model="store.editMode">
+            <label class="form-check-label" for="check-edit-mode">Edit&nbsp;mode</label>
+          </div>
+          <input type="search" class="form-control" v-model="store.tagFilter" placeholder="Tag Filter" />
+        </div>
         <div id="messages-container" class="flex-fill">
-          <div v-for="message in store.currentMessages" :key="message._id" class="d-flex flex-row justify-content-between">
+          <div v-for="message in store.currentMessages()" :key="message._id" class="d-flex flex-row justify-content-between">
             <div style="min-width: 0">
               <p class="mt-1 mb-0 text-break">
                 <strong>{{ message.sender }}:</strong>
-                <span>{{ message.message }}</span>
+                <span :contenteditable="store.editMode" style="white-space: pre-wrap;" @blur="editMessage(message._id, $event.target.textContent)" spellcheck="false" v-text="message.message"></span>
               </p>
               <p class="text-muted mt-0 mb-1">
-                <small>{{ new Date(message.createdAt).toLocaleString() }}</small>
+                <small>{{ new Date(message.createdAt).toLocaleString() }} &bull; <span :contenteditable="store.editMode" @blur="editTags(message._id, $event.target.textContent)" spellcheck="false" class="text-primary-emphasis px-2" v-text="message.tags ?? ''"></span></small>
               </p>
             </div>
             <div style="white-space: nowrap">
@@ -139,16 +158,16 @@
               </button>
             </div>
           </div>
-          <p v-show="store.currentMessages.length < 1">No messages yet</p>
+          <p v-show="store.currentMessages().length < 1">No messages yet</p>
         </div>
         
         <!-- sending messages -->
         <form class="input-group" @submit.prevent="sendMessage" v-show="store.isOnline">
-          <input type="text" class="form-control" placeholder="Message" id="input-message" v-model="store.message" required />
+          <textarea class="form-control" placeholder="Message" id="input-message" v-model="store.message" required rows="1" @keydown="onTextAreaKeydown($event)"></textarea>
           <button class="btn btn-primary">Send</button>
         </form>
       </div>
-      <div class="col-9 d-flex align-items-center justify-content-center" v-else>
+      <div class="col-md-9 d-flex flex-grow-1 pt-0 align-items-center justify-content-center" v-else>
         <p class="h4">Select a user or a group to send a message</p>
       </div>
     </div>
@@ -263,18 +282,35 @@
         addMessage(message) {
           this.messages.push(message);
         },
+        updateMessage(newMessage) {
+          const message = this.messages.find(({ _id }) => _id === newMessage._id);
+          message.message = newMessage.message;
+          message.tags = newMessage.tags;
+        },
         removeMessage(messageId) {
           this.messages = this.messages.filter(({ _id }) => _id !== messageId);
         },
         message: "",
-        get currentMessages() {
-          return this.messages.filter(({ sender, receivingUser, receivingGroup }) => {
+        currentMessages() {
+          const thisChatMessages = this.messages.filter(({ sender, receivingUser, receivingGroup }) => {
             // If sender (always a person, not a group) equals current selected user we're in DMs so only show if sending to a user
             if (sender === this.currentUser && receivingUser) return true;
             // If sent by us always show. Two cases - we sent to a user or we sent to a group
             if (receivingUser === this.currentUser || receivingGroup === this.currentGroup) return true;
             return false;
           });
+
+          if (this.tagFilter) {
+            const filterTags = this.tagFilter.trim().split(/\s+/);
+            if (filterTags.length < 1) return [];
+            return thisChatMessages.filter(({ tags }) => {
+              if (!tags) return;
+              const messageTags = tags.trim().split(/\s+/);
+              return messageTags.find(tag => filterTags.includes(tag));
+            });
+          }
+
+          return thisChatMessages;
         },
         get currentChatName() {
           if (this.currentUser) return this.currentUser;
@@ -282,6 +318,8 @@
           return null;
         },
         isOnline: true,
+        editMode: false,
+        tagFilter: "",
         currentUser: null, // username
         currentGroup: null, // group ID
         editGroupModal: {
@@ -304,7 +342,8 @@
         set showUsernameTakenToast(show) {
           if (show) usernameTakenToast.show();
           else usernameTakenToast.hide();
-        }
+        },
+        mobileExpanded: false
       });
 
       createApp({
@@ -356,6 +395,9 @@
                   case "remove-message":
                     this.store.removeMessage(msg.id)
                     break;
+                  case "edit-message":
+                    this.store.updateMessage(msg.message);
+                    break;
                 }
               };
               connection.onerror = event => {
@@ -378,6 +420,14 @@
             this.store.message = "";
           }
         },
+        editMessage(messageId, newMessage) {
+          const message = this.store.messages.find(({ _id }) => _id === messageId);
+          if (message.message !== newMessage) connection.send(JSON.stringify({ type: "edit-message", id: messageId, message: newMessage }))
+        },
+        editTags(messageId, newTags) {
+          const message = this.store.messages.find(({ _id }) => _id === messageId);
+          if (message.tags !== newTags) connection.send(JSON.stringify({ type: "edit-tags", id: messageId, tags: newTags }))
+        },
         deleteMessage(messageId) {
           connection.send(JSON.stringify({ type: "delete-message", id: messageId }));
         },
@@ -385,17 +435,26 @@
           connection.send(JSON.stringify({ type: "delete-group", id: groupId }));
         },
         scrollMessages() {
-          this.$nextTick(() => document.querySelector("#messages-container > :nth-last-child(2)")?.scrollIntoView({ behavior: "smooth" }));
+          this.$nextTick(() => document.querySelector("#messages-container > :nth-last-child(2)")?.scrollIntoView());
         },
         setCurrentUser(username) {
           this.store.currentUser = username;
           this.store.currentGroup = null;
+          this.store.mobileExpanded = false;
           this.scrollMessages();
         },
         setCurrentGroup(groupId) {
           this.store.currentUser = null;
           this.store.currentGroup = groupId;
+          this.store.mobileExpanded = false;
           this.scrollMessages();
+        },
+        onTextAreaKeydown(e) {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            if (e.target.reportValidity())
+              this.sendMessage();
+          }
         },
         openAddUserModal() {
           this.store.addUserModal.username = "";
@@ -447,6 +506,8 @@
           connection = null;
         }
       }).mount("body");
+      const registration = await navigator.serviceWorker.register("/service-worker.js");
+      console.log("Registered service worker with scope: ", registration.scope);
     </script>
   </body>
 </html>

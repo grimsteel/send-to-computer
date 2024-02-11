@@ -10,8 +10,8 @@ const messagesWss = new WebSocketServer({
 
 const invalidUsernameReg = /[^\w ]/;
 
-function isUsernameUnique(name) {
-  return !Array.from(messagesWss.clients).some(el => el.username === name);
+function getClientForUsername(name) {
+  return Array.from(messagesWss.clients).find(el => el.username === name);
 }
 
 function isValidUsername(username) {
@@ -53,25 +53,58 @@ function resolveGroupUserIds(allUsers, group) {
   };
 }
 
+async function getAffectedUsers(messageId) {
+  const { receivingUser, receivingGroup, sender } = await db.messages.findOneAsync({ _id: messageId });
+
+  // Add sender
+  const affectedUsernames = [await getUsernameFromId(sender)];
+
+  // Add receiving user
+  if (receivingUser) affectedUsernames.push(await getUsernameFromId(receivingUser));
+
+  // Add all users from receiving group
+  if (receivingGroup) {
+    const { members } = await db.groups.findOneAsync({ _id: receivingGroup });
+    const usernames = await Promise.all(members.map(getUsernameFromId));
+    affectedUsernames.push(...usernames);
+  }
+
+  return affectedUsernames;
+}
+
 const db = {
   messages: new Datastore({ filename: "data/messages.db", autoload: true }),
   users: new Datastore({ filename: "data/users.db", autoload: true }),
   groups: new Datastore({ filename: "data/groups.db", autoload: true }),
 }
 
-messagesWss.on("connection", conn => {
+messagesWss.on("connection", (conn, req) => {
+  conn.ipAddress = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
   conn.on("message", async data => {
     let parsedMsg = JSON.parse(data);
     switch (parsedMsg.type) {
       case "username": {
-        if (isUsernameUnique(parsedMsg.username) && isValidUsername(parsedMsg.username)) {
+        const existingUser = getClientForUsername(parsedMsg.username);
+        let userAlreadyExists = !!existingUser;
+        if (conn.ipAddress === existingUser?.ipAddress) {
+          userAlreadyExists = false;
+          await existingUser.close();
+        }
+        if (!userAlreadyExists && isValidUsername(parsedMsg.username)) {
+          // This is a valid user
+
           let existingUsers = getLoggedInUsers();
+          
           conn.username = parsedMsg.username;
+
+          // Find the user in the db
           const users = await db.users.findAsync();
           const user = users.find(el => el.username === conn.username);
+
           let groups = [];
           let history = [];
-          if (user) { // if this user has already been initialized
+
+          if (user) { // if this user has already been initialized, look up the groups they're in and their message history
             groups = await db.groups.findAsync({ members: { $elemMatch: user._id } });
             history = await db.messages.findAsync({ $or: [
               { sender: user._id },
@@ -79,7 +112,10 @@ messagesWss.on("connection", conn => {
               { receivingGroup: { $in: groups.map(el => el._id) } }
             ] }).sort({ createdAt: 1 });
           }
+
           const contacts = users.map(user => ({ online: false, ...user }));
+
+          // Iterate over the logged in users
           existingUsers.forEach(client => {
             const contact = contacts.find(({ username }) => client.username === username);
             if (contact) contact.online = true;
@@ -89,6 +125,8 @@ messagesWss.on("connection", conn => {
               username: conn.username,
             }));
           });
+
+
           conn.send(JSON.stringify({
             type: "logged-in",
             history: history.map(resolveMessageUserIds.bind(null, users)),
@@ -103,7 +141,7 @@ messagesWss.on("connection", conn => {
       } case "send-message": {
         const sender = await getUserIdOrCreate(conn.username)
         const receivingUser = await getUserIdOrCreate(parsedMsg.receipient);
-        const message = await db.messages.insertAsync({ sender, receivingUser, message: parsedMsg.message, createdAt: Date.now() });
+        const message = await db.messages.insertAsync({ sender, receivingUser, message: parsedMsg.message, tags: "", createdAt: Date.now() });
         sendToCertainUsers([parsedMsg.receipient, conn.username], {
           type: "receive-message",
           message: {
@@ -115,7 +153,7 @@ messagesWss.on("connection", conn => {
         break;
       } case "send-group-message": {
         const sender = await getUserIdOrCreate(conn.username)
-        const message = await db.messages.insertAsync({ sender, receivingGroup: parsedMsg.id, message: parsedMsg.message, createdAt: Date.now() });
+        const message = await db.messages.insertAsync({ sender, receivingGroup: parsedMsg.id, message: parsedMsg.message, tags: "", createdAt: Date.now() });
         const { members } = await db.groups.findOneAsync({ _id: parsedMsg.id });
         const usernames = await Promise.all(members.map(getUsernameFromId));
         sendToCertainUsers(usernames, {
@@ -126,15 +164,34 @@ messagesWss.on("connection", conn => {
           }
         });
         break;
+      } case "edit-message": {
+        const affectedUsernames = await getAffectedUsers(parsedMsg.id);
+        if (!affectedUsernames.includes(conn.username)) return;
+        const { affectedDocuments: newMessage } = await db.messages.updateAsync(
+          { _id: parsedMsg.id },
+          { $set: { message: parsedMsg.message } },
+          { returnUpdatedDocs: true }
+        );
+        sendToCertainUsers(affectedUsernames, {
+          type: "edit-message",
+          message: newMessage
+        });
+        break;
+      } case "edit-tags": {
+        const affectedUsernames = await getAffectedUsers(parsedMsg.id);
+        if (!affectedUsernames.includes(conn.username)) return;
+        const { affectedDocuments: newMessage } = await db.messages.updateAsync(
+          { _id: parsedMsg.id },
+          { $set: { tags: parsedMsg.tags } },
+          { returnUpdatedDocs: true }
+        );
+        sendToCertainUsers(affectedUsernames, {
+          type: "edit-message",
+          message: newMessage
+        });
+        break;
       } case "delete-message": {
-        const { receivingUser, receivingGroup, sender } = await db.messages.findOneAsync({ _id: parsedMsg.id });
-        const affectedUsernames = [await getUsernameFromId(sender)];
-        if (receivingUser) affectedUsernames.push(await getUsernameFromId(receivingUser));
-        if (receivingGroup) {
-          const { members } = await db.groups.findOneAsync({ _id: receivingGroup });
-          const usernames = await Promise.all(members.map(getUsernameFromId));
-          affectedUsernames.push(...usernames);
-        }
+        const affectedUsernames = await getAffectedUsers(parsedMsg.id);
         if (!affectedUsernames.includes(conn.username)) return;
         await db.messages.removeAsync({ _id: parsedMsg.id });
         sendToCertainUsers(affectedUsernames, {
@@ -162,7 +219,7 @@ messagesWss.on("connection", conn => {
         break;
       } case "edit-group": {
         const members = await Promise.all(parsedMsg.newMembers.map(getUserIdOrCreate));
-        const { affectedDocuments: newGroup } = await db.groups.updateAsync({}, { $set: { members, name: parsedMsg.name } }, { returnUpdatedDocs: true });
+        const { affectedDocuments: newGroup } = await db.groups.updateAsync({ _id: parsedMsg.id }, { $set: { members, name: parsedMsg.name } }, { returnUpdatedDocs: true });
         const removedUsers = findRemoved(parsedMsg.oldMembers, parsedMsg.newMembers);
         sendToCertainUsers(parsedMsg.newMembers, {
           type: "update-group",

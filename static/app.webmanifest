@@ -1,0 +1,16 @@
+{
+  "name": "Send to Computer",
+  "short_name": "STC",
+  "display": "fullscreen",
+  "background_color": "#212529",
+  "theme_color": "#FF5722",
+  "start_url": "/",
+  "id": "stc",
+  "icons": [
+    { "src": "/favicon.ico", "type": "image/x-icon", "sizes": "32x32" },
+    { "src": "/icons/icon-192.png", "type": "image/png", "sizes": "192x192" },
+    { "src": "/icons/icon-512.png", "type": "image/png", "sizes": "512x512" },
+    { "src": "/icons/icon-192-maskable.png", "type": "image/png", "sizes": "192x192", "purpose": "maskable" },
+    { "src": "/icons/icon-512-maskable.png", "type": "image/png", "sizes": "512x512", "purpose": "maskable" }
+  ]
+}
