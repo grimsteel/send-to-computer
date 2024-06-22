@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 import { createServer } from "http";
 import { chmodSync } from "fs";
 import registerUpgrade from "./websocket.js";
@@ -14,6 +12,6 @@ registerUpgrade(server);
 const socketPath = `${process.env.RUNTIME_DIRECTORY}/stc_socket`;
 
 server.listen(socketPath, () => {
-  chmodSync(socketPath, 0o770);
+  chmodSync(socketPath, 0o666);
   console.log(`Listening on ${socketPath}`);
 });
