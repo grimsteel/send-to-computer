@@ -59,9 +59,26 @@ impl Store {
         Ok(())
     }
 
+    pub fn list_users(&self) -> Result<HashMap<u16, String>> {
+        let tx = self.db.begin_read()?;
+        match tx.open_table(USERS_TABLE) {
+            Ok(users) => {
+                Ok(users.iter()?.filter_map(|v| {
+                    let v = v.ok()?;
+                    Some((v.0.value(), v.1.value().into()))
+                }).collect())
+            },
+
+            // if the table doesn't exist just return an empty vec
+            Err(redb::TableError::TableDoesNotExist(_)) => Ok(HashMap::new()),
+            Err(e) => Err(e.into())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{collections::HashMap, path::PathBuf};
 
     use super::Store;
 
@@ -84,6 +101,8 @@ mod tests {
 
         // make sure they exist
         assert_eq!(store.get_username(1)?.as_ref().map(|v| v.value()), Some("foo"));
+
+        assert_eq!(store.list_users()?, HashMap::from([(0, "foobar".into()), (1, "foo".into())]));
 
         Ok(())
     }
