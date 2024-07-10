@@ -7,6 +7,7 @@ use log::error;
 use tower_http::services::ServeDir;
 
 mod listener;
+mod store;
 
 #[tokio::main]
 async fn main() {
