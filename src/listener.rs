@@ -4,7 +4,7 @@ use axum::Router;
 use hyper::service::service_fn;
 use hyper_util::{rt::{TokioExecutor, TokioIo}, server::conn::auto::Builder as ServerBuilder};
 use tokio::{fs::remove_file, net::{TcpListener, UnixListener}};
-use log::error;
+use log::{error, info};
 use tokio_util::net::Listener;
 use tower::Service;
 
@@ -19,15 +19,17 @@ pub enum ListenerBindAddr {
 impl TryFrom<Args> for ListenerBindAddr {
     type Error = String;
 
-    fn try_from(mut value: Args) -> Result<Self, Self::Error> {
-        match value.len() {
+    fn try_from(all_args: Args) -> Result<Self, Self::Error> {
+        // skip the executable name
+        let mut args = all_args.skip(1);
+        match args.len() {
             0 => {
                 // no arguments provided - localhost on a random port
                 Ok(ListenerBindAddr::TcpSocket(LOCALHOST_V4, 0))
             },
             1 => {
                 // unix socket or ip addr or port
-                let arg = value.next().unwrap();
+                let arg = args.next().unwrap();
                 
                 if let Some(uds_path) = arg.strip_prefix("uds:") {
                     // if it starts with uds:, it's a unix socket
@@ -44,8 +46,8 @@ impl TryFrom<Args> for ListenerBindAddr {
             },
             2 => {
                 // ip addr + port
-                let ip_addr = value.next().unwrap();
-                let port = value.next().unwrap();
+                let ip_addr = args.next().unwrap();
+                let port = args.next().unwrap();
 
                 // parse the address and port
                 let ip_addr = ip_addr.parse().map_err(|e: AddrParseError| e.to_string())?;
@@ -60,7 +62,33 @@ impl TryFrom<Args> for ListenerBindAddr {
     }
 }
 
-async fn serve_router<T: Listener>(app: Router, listener: T) -> io::Result<()> {
+/// basically a wrapper trait around `Display` to get around orphan rules
+trait SocketDisplay {
+    fn socket_display(&self) -> String;
+}
+
+impl SocketDisplay for tokio::net::unix::SocketAddr {
+    fn socket_display(&self) -> String {
+        if let Some(path) = self.as_pathname() {
+            format!("{}", path.display())
+        } else {
+            "Unbound".into()
+        }
+    }
+}
+
+impl SocketDisplay for core::net::SocketAddr {
+    fn socket_display(&self) -> String {
+        format!("{}", self)
+    }
+}
+
+async fn serve_router<T>(app: Router, mut listener: T) -> io::Result<()>
+where T: Listener, <T as Listener>::Io: Unpin + Send + 'static, <T as Listener>::Addr: SocketDisplay
+{
+    // print the address
+    info!("Listening on {}", listener.local_addr().expect("can get address").socket_display());
+    
     loop {
         let (socket, _addr) = listener.accept().await?;
         let service = app.clone();
@@ -84,12 +112,13 @@ async fn serve_router<T: Listener>(app: Router, listener: T) -> io::Result<()> {
 pub async fn serve(app: Router, addr: ListenerBindAddr) -> io::Result<()> {
     match addr {
         ListenerBindAddr::TcpSocket(ip_addr, port) => {
-            let listener = TcpListener::bind((ip_addr, port)).await.unwrap();
+            let listener = TcpListener::bind((ip_addr, port)).await?;
             serve_router(app, listener).await
         },
         ListenerBindAddr::UnixSocket(path) => {
-            remove_file(&path).await?;
-            let listener = UnixListener::bind(path).unwrap();
+            // remove the unix socket
+            let _ = remove_file(&path).await;
+            let listener = UnixListener::bind(path)?;
             serve_router(app, listener).await
         }
     }
