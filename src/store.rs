@@ -2,19 +2,21 @@ use std::{collections::HashMap, fmt::Display, path::Path};
 
 use redb::{backends::InMemoryBackend, AccessGuard, Database, ReadableTable, TableDefinition};
 
-type USERS<'a> = TableDefinition<'a, u16, &'a str>;
-const USERS_TABLE: USERS = TableDefinition::new("users");
+const USERS_TABLE: TableDefinition<u16, &str> = TableDefinition::new("users");
+const GROUPS_TABLE: TableDefinition<u16, (&str, Vec<u16>)> = TableDefinition::new("groups");
 
 #[derive(Debug)]
 pub enum StoreError {
     RedbError(redb::Error),
+    InvalidUserIds
 }
 
 impl<T> From<T> for StoreError where T: Into<redb::Error> { fn from(value: T) -> Self { Self::RedbError(value.into()) } }
 impl Display for StoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            StoreError::RedbError(err) => write!(f, "Redb Error: {err}")
+            StoreError::RedbError(err) => write!(f, "Redb Error: {err}"),
+            StoreError::InvalidUserIds => write!(f, "Invalid user IDs")
         }
     }
 }
@@ -45,7 +47,7 @@ impl Store {
         }
     }
 
-    pub fn add_user(&self, username: &str) -> Result<()> {
+    pub fn create_user(&self, username: &str) -> Result<()> {
         let tx = self.db.begin_write()?;
         {
             let mut users = tx.open_table(USERS_TABLE)?;
@@ -74,6 +76,26 @@ impl Store {
             Err(e) => Err(e.into())
         }
     }
+
+    pub fn create_group(&self, name: &str, initial_users: Vec<u16>) -> Result<()> {
+        let tx = self.db.begin_write()?;
+        {
+            let users = tx.open_table(USERS_TABLE)?;
+            // make sure all of the users exist
+            if !initial_users.iter().all(|id| users.get(id).is_ok_and(|v| v.is_some())) {
+                return Err(StoreError::InvalidUserIds);
+            }
+            
+            let mut groups = tx.open_table(GROUPS_TABLE)?;
+            // add one to last key
+            let group_id = groups
+                .last()?.map(|v| v.0.value() + 1)
+                .unwrap_or_default();
+            groups.insert(group_id, (name, initial_users))?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -91,13 +113,13 @@ mod tests {
         assert!(store.get_username(0)?.is_none());
 
         // add a user
-        store.add_user("foobar")?;
+        store.create_user("foobar")?;
 
         // make sure they exist
         assert_eq!(store.get_username(0)?.as_ref().map(|v| v.value()), Some("foobar"));
 
         // add another user
-        store.add_user("foo")?;
+        store.create_user("foo")?;
 
         // make sure they exist
         assert_eq!(store.get_username(1)?.as_ref().map(|v| v.value()), Some("foo"));
