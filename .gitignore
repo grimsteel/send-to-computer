@@ -5,3 +5,7 @@ stc.service
 static/bootstrap.min.css
 static/bootstrap.esm.min.js
 server.cjs
+
+# Added by cargo
+
+/target
