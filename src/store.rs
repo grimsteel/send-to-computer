@@ -1,22 +1,84 @@
 use std::{collections::HashMap, fmt::Display, path::Path};
 
-use redb::{backends::InMemoryBackend, AccessGuard, Database, ReadableTable, TableDefinition};
+use redb::{backends::InMemoryBackend, AccessGuard, Database, Key, ReadableTable, TableDefinition, TypeName, Value};
+use serde::{Deserialize, Serialize};
+
+// either a group or a user
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+enum MessageSenderRecipient {
+    User(u16),
+    Group(u16),
+}
+
+impl Value for MessageSenderRecipient {
+    type SelfType<'a> = Self;
+    type AsBytes<'a> = Vec<u8>;
+
+    fn fixed_width() -> Option<usize> {
+        None
+    }
+
+    fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
+    where
+        Self: 'a {
+        bincode::deserialize(data).unwrap()
+    }
+
+    fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
+    where
+        Self: 'a,
+        Self: 'b {
+        bincode::serialize(value).unwrap()
+    }
+
+    fn type_name() -> TypeName {
+        TypeName::new("MessageSenderRecipient")
+    }
+}
+
+impl Key for MessageSenderRecipient {
+    fn compare(data1: &[u8], data2: &[u8]) -> std::cmp::Ordering {
+        Self::from_bytes(data1).cmp(&Self::from_bytes(data2))
+    }
+}
 
 const USERS_TABLE: TableDefinition<u16, &str> = TableDefinition::new("users");
 const GROUPS_TABLE: TableDefinition<u16, (&str, Vec<u16>)> = TableDefinition::new("groups");
+const MESSAGES_TABLE: TableDefinition<
+    u16,
+    (
+        MessageSenderRecipient,
+        MessageSenderRecipient,
+        &str,      // message
+        i16,       // time
+        Vec<&str>, // tags
+    ),
+> = TableDefinition::new("messages");
+//
+const MSG_SENDER_RECIPIENT_TABLE: TableDefinition<
+    (MessageSenderRecipient, MessageSenderRecipient, u16),
+    (),
+> = TableDefinition::new("message_sender_recipients");
 
 #[derive(Debug)]
 pub enum StoreError {
     RedbError(redb::Error),
-    InvalidUserIds
+    InvalidUserIds,
 }
 
-impl<T> From<T> for StoreError where T: Into<redb::Error> { fn from(value: T) -> Self { Self::RedbError(value.into()) } }
+impl<T> From<T> for StoreError
+where
+    T: Into<redb::Error>,
+{
+    fn from(value: T) -> Self {
+        Self::RedbError(value.into())
+    }
+}
 impl Display for StoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StoreError::RedbError(err) => write!(f, "Redb Error: {err}"),
-            StoreError::InvalidUserIds => write!(f, "Invalid user IDs")
+            StoreError::InvalidUserIds => write!(f, "Invalid user IDs"),
         }
     }
 }
@@ -185,14 +247,29 @@ mod tests {
         let group_1 = (1, ("foobar".into(), vec![1]));
 
         // make sure we can read the groups for each user
-        assert_eq!(store.get_groups_for_user(0)?, HashMap::from([group_0.clone()]));
-        assert_eq!(store.get_groups_for_user(1)?, HashMap::from([group_0, group_1]));
+        assert_eq!(
+            store.get_groups_for_user(0)?,
+            HashMap::from([group_0.clone()])
+        );
+        assert_eq!(
+            store.get_groups_for_user(1)?,
+            HashMap::from([group_0, group_1])
+        );
 
         // delete a group
         store.delete_group(0)?;
 
         assert_eq!(store.get_groups_for_user(0)?, HashMap::new());
-        
+
+        // edit group 1
+        store.create_update_group("bar", vec![0], Some(1))?;
+
+        assert_eq!(
+            store.get_groups_for_user(0)?,
+            HashMap::from([(1, ("bar".into(), vec![0]))])
+        );
+        assert_eq!(store.get_groups_for_user(1)?, HashMap::new());
+
         Ok(())
     }
 }
