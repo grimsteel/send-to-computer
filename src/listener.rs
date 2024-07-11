@@ -1,10 +1,21 @@
-use std::{env::Args, io, net::{AddrParseError, IpAddr, Ipv4Addr}, num::ParseIntError};
+use std::{
+    env::Args,
+    io,
+    net::{AddrParseError, IpAddr, Ipv4Addr},
+    num::ParseIntError,
+};
 
 use axum::Router;
 use hyper::service::service_fn;
-use hyper_util::{rt::{TokioExecutor, TokioIo}, server::conn::auto::Builder as ServerBuilder};
-use tokio::{fs::remove_file, net::{TcpListener, UnixListener}};
+use hyper_util::{
+    rt::{TokioExecutor, TokioIo},
+    server::conn::auto::Builder as ServerBuilder,
+};
 use log::{error, info};
+use tokio::{
+    fs::remove_file,
+    net::{TcpListener, UnixListener},
+};
 use tokio_util::net::Listener;
 use tower::Service;
 
@@ -13,7 +24,7 @@ const LOCALHOST_V4: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 /// A TCP address or Unix Socket address
 pub enum ListenerBindAddr {
     TcpSocket(IpAddr, u16),
-    UnixSocket(String)
+    UnixSocket(String),
 }
 
 impl TryFrom<Args> for ListenerBindAddr {
@@ -26,11 +37,11 @@ impl TryFrom<Args> for ListenerBindAddr {
             0 => {
                 // no arguments provided - localhost on a random port
                 Ok(ListenerBindAddr::TcpSocket(LOCALHOST_V4, 0))
-            },
+            }
             1 => {
                 // unix socket or ip addr or port
                 let arg = args.next().unwrap();
-                
+
                 if let Some(uds_path) = arg.strip_prefix("uds:") {
                     // if it starts with uds:, it's a unix socket
                     Ok(ListenerBindAddr::UnixSocket(uds_path.into()))
@@ -41,9 +52,11 @@ impl TryFrom<Args> for ListenerBindAddr {
                     // if it's a valid ip addr, it's a random port on the address
                     Ok(ListenerBindAddr::TcpSocket(ip_addr, 0))
                 } else {
-                    Err(format!("Invalid argument: {arg}. Must be a valid UDS path, port, or ip address"))
+                    Err(format!(
+                        "Invalid argument: {arg}. Must be a valid UDS path, port, or ip address"
+                    ))
                 }
-            },
+            }
             2 => {
                 // ip addr + port
                 let ip_addr = args.next().unwrap();
@@ -54,10 +67,8 @@ impl TryFrom<Args> for ListenerBindAddr {
                 let port = port.parse().map_err(|e: ParseIntError| e.to_string())?;
 
                 Ok(ListenerBindAddr::TcpSocket(ip_addr, port))
-            },
-            _ => {
-                Err("Too many arguments provided".into())
             }
+            _ => Err("Too many arguments provided".into()),
         }
     }
 }
@@ -84,11 +95,20 @@ impl SocketDisplay for core::net::SocketAddr {
 }
 
 async fn serve_router<T>(app: Router, mut listener: T) -> io::Result<()>
-where T: Listener, <T as Listener>::Io: Unpin + Send + 'static, <T as Listener>::Addr: SocketDisplay
+where
+    T: Listener,
+    <T as Listener>::Io: Unpin + Send + 'static,
+    <T as Listener>::Addr: SocketDisplay,
 {
     // print the address
-    info!("Listening on {}", listener.local_addr().expect("can get address").socket_display());
-    
+    info!(
+        "Listening on {}",
+        listener
+            .local_addr()
+            .expect("can get address")
+            .socket_display()
+    );
+
     loop {
         let (socket, _addr) = listener.accept().await?;
         let service = app.clone();
@@ -114,7 +134,7 @@ pub async fn serve(app: Router, addr: ListenerBindAddr) -> io::Result<()> {
         ListenerBindAddr::TcpSocket(ip_addr, port) => {
             let listener = TcpListener::bind((ip_addr, port)).await?;
             serve_router(app, listener).await
-        },
+        }
         ListenerBindAddr::UnixSocket(path) => {
             // remove the unix socket
             let _ = remove_file(&path).await;
