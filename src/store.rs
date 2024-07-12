@@ -1,64 +1,60 @@
-use std::{collections::HashMap, fmt::Display, path::Path};
+use std::{borrow::Cow, collections::HashMap, fmt::Display, path::Path};
 
-use redb::{backends::InMemoryBackend, AccessGuard, Database, Key, ReadableTable, TableDefinition, TypeName, Value};
+use redb::{
+    backends::InMemoryBackend, AccessGuard, Database, Key, ReadableTable, TableDefinition,
+    TypeName, Value,
+};
 use serde::{Deserialize, Serialize};
 
 // either a group or a user
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-enum MessageSenderRecipient {
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
+pub enum MessageRecipient {
     User(u16),
     Group(u16),
 }
 
-impl Value for MessageSenderRecipient {
+impl Value for MessageRecipient {
     type SelfType<'a> = Self;
     type AsBytes<'a> = Vec<u8>;
-
-    fn fixed_width() -> Option<usize> {
-        None
-    }
-
-    fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
-    where
-        Self: 'a {
-        bincode::deserialize(data).unwrap()
-    }
-
-    fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
-    where
-        Self: 'a,
-        Self: 'b {
-        bincode::serialize(value).unwrap()
-    }
-
-    fn type_name() -> TypeName {
-        TypeName::new("MessageSenderRecipient")
-    }
+    fn fixed_width() -> Option<usize> { None }
+    fn from_bytes<'a>(data: &'a [u8]) -> Self where Self: 'a { bincode::deserialize(data).unwrap() }
+    fn as_bytes<'a, 'b: 'a>(value: &'a Self) -> Vec<u8> { bincode::serialize(value).unwrap() }
+    fn type_name() -> TypeName { TypeName::new("MessageSenderRecipient") }
 }
 
-impl Key for MessageSenderRecipient {
+impl Key for MessageRecipient {
     fn compare(data1: &[u8], data2: &[u8]) -> std::cmp::Ordering {
         Self::from_bytes(data1).cmp(&Self::from_bytes(data2))
     }
 }
 
-const USERS_TABLE: TableDefinition<u16, &str> = TableDefinition::new("users");
-const GROUPS_TABLE: TableDefinition<u16, (&str, Vec<u16>)> = TableDefinition::new("groups");
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+pub struct Message {
+    pub sender: u16,
+    pub recipient: MessageRecipient,
+    pub message: String,
+    pub time: i16,
+    pub tags: Vec<String>
+}
+
+impl Value for Message {
+    type SelfType<'a> = Self;
+    type AsBytes<'a> = Vec<u8>;
+    fn fixed_width() -> Option<usize> { None }
+    fn from_bytes<'a>(data: &'a [u8]) -> Self where Self: 'a { bincode::deserialize(data).unwrap() }
+    fn as_bytes<'a, 'b: 'a>(value: &'a Self) -> Vec<u8> { bincode::serialize(value).unwrap() }
+    fn type_name() -> TypeName { TypeName::new("Message") }
+}
+
+const USERS_TABLE: TableDefinition<u16, String> = TableDefinition::new("users");
+const GROUPS_TABLE: TableDefinition<u16, (String, Vec<u16>)> = TableDefinition::new("groups");
 const MESSAGES_TABLE: TableDefinition<
     u16,
-    (
-        MessageSenderRecipient,
-        MessageSenderRecipient,
-        &str,      // message
-        i16,       // time
-        Vec<&str>, // tags
-    ),
+    Message,
 > = TableDefinition::new("messages");
-//
-const MSG_SENDER_RECIPIENT_TABLE: TableDefinition<
-    (MessageSenderRecipient, MessageSenderRecipient, u16),
-    (),
-> = TableDefinition::new("message_sender_recipients");
+// (recipient, message id)
+const MSG_RECIPIENT_TABLE: TableDefinition<(MessageRecipient, u16), ()> =
+    TableDefinition::new("message_recipients");
 
 #[derive(Debug)]
 pub enum StoreError {
@@ -101,17 +97,17 @@ impl Store {
         Ok(Self { db })
     }
 
-    pub fn get_username(&self, id: u16) -> Result<Option<AccessGuard<&'static str>>> {
+    pub fn get_username(&self, id: u16) -> Result<Option<String>> {
         let tx = self.db.begin_read()?;
         match tx.open_table(USERS_TABLE) {
-            Ok(users) => Ok(users.get(id)?),
+            Ok(users) => Ok(users.get(id)?.map(|v| v.value())),
             // if the table doesn't exist just return None
             Err(redb::TableError::TableDoesNotExist(_)) => Ok(None),
             Err(e) => Err(e.into()),
         }
     }
 
-    pub fn create_user(&self, username: &str) -> Result<()> {
+    pub fn create_user(&self, username: String) -> Result<()> {
         let tx = self.db.begin_write()?;
         {
             let mut users = tx.open_table(USERS_TABLE)?;
@@ -142,7 +138,7 @@ impl Store {
 
     pub fn create_update_group(
         &self,
-        name: &str,
+        name: String,
         mut users: Vec<u16>,
         id: Option<u16>,
     ) -> Result<()> {
@@ -178,7 +174,22 @@ impl Store {
         {
             let mut groups = tx.open_table(GROUPS_TABLE)?;
             groups.remove(id)?;
-            // TODO: delete messages for group
+
+            let group = MessageRecipient::Group(id);
+
+            // delete all messages ever received by this group
+            let mut msg_recipients = tx.open_table(MSG_RECIPIENT_TABLE)?;
+            let mut messages = tx.open_table(MESSAGES_TABLE)?;
+
+            let start = (group, u16::MIN);
+            let end = (group, u16::MAX);
+            let messages_received = msg_recipients.extract_from_if(start..=end, |_, _| true)?;
+            for message in messages_received {
+                let (message, _) = message?;
+                let (_, message_id) = message.value();
+                // delete the message
+                messages.remove(message_id)?;
+            }
         }
         tx.commit()?;
         Ok(())
@@ -189,7 +200,7 @@ impl Store {
 
         // make sure the user exists
         let users = tx.open_table(USERS_TABLE)?;
-        if !users.get(user_id).is_ok() {
+        if users.get(user_id).is_err() {
             return Err(StoreError::InvalidUserIds);
         }
 
@@ -206,6 +217,8 @@ impl Store {
             })
             .collect())
     }
+
+
 }
 
 #[cfg(test)]
@@ -225,20 +238,20 @@ mod tests {
         assert!(store.get_username(0)?.is_none());
 
         // add a user
-        store.create_user("foobar")?;
+        store.create_user("foobar".into())?;
 
         // make sure they exist
         assert_eq!(
-            store.get_username(0)?.as_ref().map(|v| v.value()),
+            store.get_username(0)?.as_ref().map(|a| a.as_str()),
             Some("foobar")
         );
 
         // add another user
-        store.create_user("foo")?;
+        store.create_user("foo".into())?;
 
         // make sure they exist
         assert_eq!(
-            store.get_username(1)?.as_ref().map(|v| v.value()),
+            store.get_username(1)?.as_ref().map(|a| a.as_str()),
             Some("foo")
         );
 
@@ -254,18 +267,18 @@ mod tests {
     fn add_groups() -> Result {
         let store = Store::init::<PathBuf>(None)?;
 
-        store.create_user("foobar")?;
+        store.create_user("foobar".into())?;
 
         // try creating the group with invalid users
         assert!(matches!(
-            store.create_update_group("foo", vec![0, 1], None),
+            store.create_update_group("foo".into(), vec![0, 1], None),
             Err(StoreError::InvalidUserIds)
         ));
 
-        store.create_user("foo")?;
+        store.create_user("foo".into())?;
 
-        store.create_update_group("foo", vec![0, 1], None)?;
-        store.create_update_group("foobar", vec![1], None)?;
+        store.create_update_group("foo".into(), vec![0, 1], None)?;
+        store.create_update_group("foobar".into(), vec![1], None)?;
 
         let group_0 = (0, ("foo".into(), vec![0, 1]));
         let group_1 = (1, ("foobar".into(), vec![1]));
@@ -286,7 +299,7 @@ mod tests {
         assert_eq!(store.get_groups_for_user(0)?, HashMap::new());
 
         // edit group 1
-        store.create_update_group("bar", vec![0], Some(1))?;
+        store.create_update_group("bar".into(), vec![0], Some(1))?;
 
         assert_eq!(
             store.get_groups_for_user(0)?,
