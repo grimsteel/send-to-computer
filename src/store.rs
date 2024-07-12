@@ -53,17 +53,17 @@ const MESSAGES_TABLE: TableDefinition<
     u16,
     Message,
 > = TableDefinition::new("messages");
-// (sender, message id)
-const MSG_SENDER_TABLE: TableDefinition<(u16, u16), ()> =
+// (recipient, sender, message id)
+const MSG_ENDPOINT_TABLE: TableDefinition<(MessageRecipient, u16, u16), ()> =
     TableDefinition::new("message_senders");
-// (recipient, message id)
-const MSG_RECIPIENT_TABLE: TableDefinition<(MessageRecipient, u16), ()> =
-    TableDefinition::new("message_recipients");
 
 #[derive(Debug)]
 pub enum StoreError {
     RedbError(redb::Error),
     InvalidUserIds,
+    InvalidGroupId,
+    InvalidMessageId,
+    PermissionDenied
 }
 
 impl<T> From<T> for StoreError
@@ -78,7 +78,10 @@ impl Display for StoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StoreError::RedbError(err) => write!(f, "Redb Error: {err}"),
-            StoreError::InvalidUserIds => write!(f, "Invalid user IDs"),
+            StoreError::InvalidUserIds => write!(f, "Invalid user ID(s)"),
+            StoreError::InvalidGroupId => write!(f, "Invalid group ID"),
+            StoreError::InvalidMessageId => write!(f, "Invalid message ID"),
+            StoreError::PermissionDenied => write!(f, "Permission denied")
         }
     }
 }
@@ -182,22 +185,16 @@ impl Store {
             let group = MessageRecipient::Group(id);
 
             // delete all messages ever received by this group
-            let mut msg_recipients = tx.open_table(MSG_RECIPIENT_TABLE)?;
-            let mut msg_senders = tx.open_table(MSG_SENDER_TABLE)?;
+            let mut msg_endpoints = tx.open_table(MSG_ENDPOINT_TABLE)?;
             let mut messages = tx.open_table(MESSAGES_TABLE)?;
 
-            let start = (group, u16::MIN);
-            let end = (group, u16::MAX);
-            let messages_received = msg_recipients.extract_from_if(start..=end, |_, _| true)?;
-            for message in messages_received {
+            // iterate through all messages received by this group
+            let messages_sent_to_group = msg_endpoints.extract_from_if((group, u16::MIN, u16::MIN)..=(group, u16::MAX, u16::MAX), |_, _| true)?;
+            for message in messages_sent_to_group {
                 let (message, _) = message?;
-                let (_, message_id) = message.value();
+                let (_, _, message_id) = message.value();
                 // delete the message
-                if let Some(message) = messages.remove(message_id)? {
-                    let sender = message.value().sender;
-                    // delete it from the senders table
-                    msg_senders.remove((sender, message_id))?;
-                }
+                messages.remove(message_id)?;
             }
         }
         tx.commit()?;
@@ -230,6 +227,28 @@ impl Store {
     pub fn send_message(&self, message: String, sender: u16, recipient: MessageRecipient) -> Result<Message> {
         let tx = self.db.begin_write()?;
 
+        // make sure the recepient exists
+        match recipient {
+            MessageRecipient::Group(group_id) => {                
+                let groups = tx.open_table(GROUPS_TABLE)?;
+                if let Some(group) = groups.get(group_id)? {
+                    // make sure they're a member of this group
+                    let users = group.value().1;
+                    if !users.contains(&sender) {
+                        return Err(StoreError::PermissionDenied);
+                    }
+                } else {
+                    return Err(StoreError::InvalidGroupId);
+                };
+            },
+            MessageRecipient::User(user_id) => {
+                let users = tx.open_table(USERS_TABLE)?;
+                if users.get(user_id)?.is_none() {
+                    return Err(StoreError::InvalidUserIds);
+                };
+            }
+        }
+
         let time = Utc::now().timestamp();
         let message = Message {
             message,
@@ -245,13 +264,9 @@ impl Store {
             let id = messages.last()?.map(|v| v.0.value() + 1).unwrap_or_default();
             messages.insert(id, message.clone())?;
 
-            // add it to the recipients table
-            let mut msg_recipients = tx.open_table(MSG_RECIPIENT_TABLE)?;
-            msg_recipients.insert((recipient, id), ())?;
-
-            // add it to the senders table
-            let mut msg_senders = tx.open_table(MSG_SENDER_TABLE)?;
-            msg_senders.insert((sender, id), ())?;
+            // add it to the endpoints table
+            let mut msg_endpoints = tx.open_table(MSG_ENDPOINT_TABLE)?;
+            msg_endpoints.insert((recipient, sender, id), ())?;
         }
 
         tx.commit()?;
@@ -263,15 +278,12 @@ impl Store {
 
         {
             let mut messages = tx.open_table(MESSAGES_TABLE)?;
-            // add one to last key
-            if let Some(message) = messages.remove(id)? {
-                let Message { sender, recipient, .. } = message.value();
-                // remove from the recipients table
-                let mut msg_recipients = tx.open_table(MSG_RECIPIENT_TABLE)?;
-                msg_recipients.remove((recipient, id))?;
-                // remove from the sendesr table
-                let mut msg_senders = tx.open_table(MSG_SENDER_TABLE)?;
-                msg_senders.remove((sender, id))?;
+            let mut msg_endpoints = tx.open_table(MSG_ENDPOINT_TABLE)?;
+            
+            // make sure they're allowed to delete this message
+            if let Some(Message { sender, recipient, .. }) = messages.get(id)?.map(|a| a.value()) {
+                messages.remove(id)?;
+                msg_endpoints.remove((recipient, sender, id))?;
             };
         }
 
@@ -279,41 +291,39 @@ impl Store {
         Ok(())
     }
 
-    /// get all messages received by these groups
-    /// returns a map of group ID to messages
-    pub fn get_group_message(&self, groups: &[u16]) -> Result<HashMap<u16, Vec<Message>>> {
+    /// get all messages received by this group
+    pub fn get_group_messages(&self, user_id: u16, group_id: u16) -> Result<Vec<Message>> {
         let tx = self.db.begin_read()?;
         let messages = tx.open_table(MESSAGES_TABLE)?;
-        let msg_recipients = tx.open_table(MSG_RECIPIENT_TABLE)?;
+        let msg_endpoints = tx.open_table(MSG_ENDPOINT_TABLE)?;
         
-        groups.into_iter()
-            .map(|&group_id| {
-                let recipient = MessageRecipient::Group(group_id);
-                let messages: Result<Vec<Message>> = msg_recipients
-                    .range((recipient, u16::MIN)..=(recipient, u16::MAX))?
-                    .into_iter()
-                    // get the message data
-                    .map(|message| -> Result<Option<Message>> {
-                        let message_id = message?.0.value().1;
-                        let message = messages.get(message_id)?;
-                        Ok(message.map(|a| a.value()))
-                    })
-                    // I want to keep errors (so I can surface them)
-                    // but I don't care about non existent messages
-                    .filter_map(|item| item.transpose())
-                    .collect();
-
-                Ok((group_id, messages?))
+        let recipient = MessageRecipient::Group(group_id);
+        msg_endpoints
+            .range((recipient, u16::MIN, u16::MIN)..=(recipient, u16::MAX, u16::MAX))?
+            .into_iter()
+        // get the message data
+            .map(|message| -> Result<Option<Message>> {
+                let message_id = message?.0.value().1;
+                let message = messages.get(message_id)?;
+                Ok(message.map(|a| a.value()))
             })
+        // I want to keep errors (so I can surface them)
+        // but I don't care about non existent messages
+            .filter_map(|item| item.transpose())
             .collect()
     }
 
-    /// get all user->user messages sent/received by this user
-    /// does not return group messages
-    pub fn get_messages_for_user(&self, user_id: u16) -> Result<Vec<Message>> {
+    /// get all messages sent from user a to user b
+    pub fn get_user_messages(&self, user_a: u16, user_b: u16) -> Result<Vec<Message>> {
         let tx = self.db.begin_read()?;
+        let messages = tx.open_table(MESSAGES_TABLE)?;
+        let msg_endpoints = tx.open_table(MSG_ENDPOINT_TABLE)?;
+
+        let recipient = MessageRecipient::User(user_id);
         
-        let mut messages = vec![];
+        let mut messages_received = msg_endpoints
+            .range((recipient, u16::MIN, u16::MIN)..=(recipient, u16::MAX, u16::MAX))?
+        .into_iter()
 
 
         Ok(messages)
