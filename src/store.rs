@@ -53,6 +53,9 @@ const MESSAGES_TABLE: TableDefinition<
     u16,
     Message,
 > = TableDefinition::new("messages");
+// (sender, message id)
+const MSG_SENDER_TABLE: TableDefinition<(u16, u16), ()> =
+    TableDefinition::new("message_senders");
 // (recipient, message id)
 const MSG_RECIPIENT_TABLE: TableDefinition<(MessageRecipient, u16), ()> =
     TableDefinition::new("message_recipients");
@@ -180,6 +183,7 @@ impl Store {
 
             // delete all messages ever received by this group
             let mut msg_recipients = tx.open_table(MSG_RECIPIENT_TABLE)?;
+            let mut msg_senders = tx.open_table(MSG_SENDER_TABLE)?;
             let mut messages = tx.open_table(MESSAGES_TABLE)?;
 
             let start = (group, u16::MIN);
@@ -189,7 +193,11 @@ impl Store {
                 let (message, _) = message?;
                 let (_, message_id) = message.value();
                 // delete the message
-                messages.remove(message_id)?;
+                if let Some(message) = messages.remove(message_id)? {
+                    let sender = message.value().sender;
+                    // delete it from the senders table
+                    msg_senders.remove((sender, message_id))?;
+                }
             }
         }
         tx.commit()?;
@@ -240,6 +248,10 @@ impl Store {
             // add it to the recipients table
             let mut msg_recipients = tx.open_table(MSG_RECIPIENT_TABLE)?;
             msg_recipients.insert((recipient, id), ())?;
+
+            // add it to the senders table
+            let mut msg_senders = tx.open_table(MSG_SENDER_TABLE)?;
+            msg_senders.insert((sender, id), ())?;
         }
 
         tx.commit()?;
@@ -253,9 +265,13 @@ impl Store {
             let mut messages = tx.open_table(MESSAGES_TABLE)?;
             // add one to last key
             if let Some(message) = messages.remove(id)? {
-                // remove from messages table
+                let Message { sender, recipient, .. } = message.value();
+                // remove from the recipients table
                 let mut msg_recipients = tx.open_table(MSG_RECIPIENT_TABLE)?;
-                msg_recipients.remove((message.value().recipient, id))?;
+                msg_recipients.remove((recipient, id))?;
+                // remove from the sendesr table
+                let mut msg_senders = tx.open_table(MSG_SENDER_TABLE)?;
+                msg_senders.remove((sender, id))?;
             };
         }
 
@@ -263,14 +279,42 @@ impl Store {
         Ok(())
     }
 
-    pub fn get_messages_for_user(&self, user_id: u16) -> Result<HashMap<String, Vec<Message>>> {
+    /// get all messages received by these groups
+    /// returns a map of group ID to messages
+    pub fn get_group_message(&self, groups: &[u16]) -> Result<HashMap<u16, Vec<Message>>> {
         let tx = self.db.begin_read()?;
-        let users = tx.open_table(USERS_TABLE)?;
+        let messages = tx.open_table(MESSAGES_TABLE)?;
+        let msg_recipients = tx.open_table(MSG_RECIPIENT_TABLE)?;
         
-        let mut messages = HashMap::new();
-        for user in users.iter()? {
-            
-        }
+        groups.into_iter()
+            .map(|&group_id| {
+                let recipient = MessageRecipient::Group(group_id);
+                let messages: Result<Vec<Message>> = msg_recipients
+                    .range((recipient, u16::MIN)..=(recipient, u16::MAX))?
+                    .into_iter()
+                    // get the message data
+                    .map(|message| -> Result<Option<Message>> {
+                        let message_id = message?.0.value().1;
+                        let message = messages.get(message_id)?;
+                        Ok(message.map(|a| a.value()))
+                    })
+                    // I want to keep errors (so I can surface them)
+                    // but I don't care about non existent messages
+                    .filter_map(|item| item.transpose())
+                    .collect();
+
+                Ok((group_id, messages?))
+            })
+            .collect()
+    }
+
+    /// get all user->user messages sent/received by this user
+    /// does not return group messages
+    pub fn get_messages_for_user(&self, user_id: u16) -> Result<Vec<Message>> {
+        let tx = self.db.begin_read()?;
+        
+        let mut messages = vec![];
+
 
         Ok(messages)
     }
