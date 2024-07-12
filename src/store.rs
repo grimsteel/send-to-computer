@@ -1,8 +1,8 @@
-use std::{borrow::Cow, collections::HashMap, fmt::Display, path::Path};
+use std::{collections::HashMap, fmt::Display, path::Path};
 
 use chrono::Utc;
 use redb::{
-    backends::InMemoryBackend, AccessGuard, Database, Key, ReadableTable, TableDefinition,
+    backends::InMemoryBackend,  Database, Key, ReadableTable, TableDefinition,
     TypeName, Value,
 };
 use serde::{Deserialize, Serialize};
@@ -147,15 +147,32 @@ impl Store {
         &self,
         name: String,
         mut users: Vec<u16>,
-        id: Option<u16>,
+        group_id: Option<u16>,
+        user_id: u16
     ) -> Result<()> {
         let tx = self.db.begin_write()?;
         {
+            let mut groups = tx.open_table(GROUPS_TABLE)?;
+            let group_id = if let Some(id) = group_id {
+                // make sure this group exists and has the user in it
+                if let Some(group) = groups.get(id)? {
+                    if !group.value().1.contains(&user_id) {
+                        return Err(StoreError::PermissionDenied);
+                    }
+                } else {
+                    return Err(StoreError::InvalidGroupId);
+                }
+                id
+            } else {
+                // add one to last key
+                groups.last()?.map(|v| v.0.value() + 1).unwrap_or_default()
+            };
+            
             let users_table = tx.open_table(USERS_TABLE)?;
             // make sure all of the users exist
             if !users
                 .iter()
-                .all(|id| users_table.get(id).is_ok_and(|v| v.is_some()))
+                .all(|user_id| users_table.get(user_id).is_ok_and(|v| v.is_some()))
             {
                 return Err(StoreError::InvalidUserIds);
             }
@@ -163,26 +180,26 @@ impl Store {
             // sort the users so we can do binary search
             users.sort_unstable();
 
-            let mut groups = tx.open_table(GROUPS_TABLE)?;
-            let group_id = if let Some(id) = id {
-                id
-            } else {
-                // add one to last key
-                groups.last()?.map(|v| v.0.value() + 1).unwrap_or_default()
-            };
             groups.insert(group_id, (name, users))?;
         }
         tx.commit()?;
         Ok(())
     }
 
-    pub fn delete_group(&self, id: u16) -> Result<()> {
+    pub fn delete_group(&self, group_id: u16, user_id: u16) -> Result<()> {
         let tx = self.db.begin_write()?;
         {
             let mut groups = tx.open_table(GROUPS_TABLE)?;
-            groups.remove(id)?;
+            if let Some(group) = groups.remove(group_id)? {
+                // make sure they are a member of this group
+                if !group.value().1.contains(&user_id) {
+                    return Err(StoreError::PermissionDenied);
+                }
+            } else {
+                return Err(StoreError::InvalidGroupId);
+            }
 
-            let group = MessageRecipient::Group(id);
+            let group = MessageRecipient::Group(group_id);
 
             // delete all messages ever received by this group
             let mut msg_endpoints = tx.open_table(MSG_ENDPOINT_TABLE)?;
@@ -273,7 +290,7 @@ impl Store {
         Ok(message)
     }
 
-    pub fn delete_message(&self, id: u16) -> Result<()> {
+    pub fn delete_message(&self, message_id: u16, user_id: u16) -> Result<()> {
         let tx = self.db.begin_write()?;
 
         {
@@ -281,10 +298,35 @@ impl Store {
             let mut msg_endpoints = tx.open_table(MSG_ENDPOINT_TABLE)?;
             
             // make sure they're allowed to delete this message
-            if let Some(Message { sender, recipient, .. }) = messages.get(id)?.map(|a| a.value()) {
-                messages.remove(id)?;
-                msg_endpoints.remove((recipient, sender, id))?;
-            };
+            let message = messages.get(message_id)?.map(|a| a.value());
+            if let Some(Message { sender, recipient, .. }) = message {
+                if sender != user_id {
+                    // check if they're the recipient
+                    if !match recipient {
+                        MessageRecipient::User(recipient_user_id) => recipient_user_id == user_id,
+                        MessageRecipient::Group(group_id) => {
+                            let groups = tx.open_table(GROUPS_TABLE)?;
+                            let group = groups.get(group_id)?;
+                            if let Some(group) = group {
+                                // make sure they're a member of this group
+                                let users = group.value().1;
+                                users.contains(&sender)
+                            } else {
+                                // group doesn't exist
+                                false
+                            }
+                        }
+                    } {
+                        // they're not the recipient
+                        return Err(StoreError::PermissionDenied);
+                    }
+                }
+                // actually delete the message
+                messages.remove(message_id)?;
+                msg_endpoints.remove((recipient, sender, message_id))?;
+            } else {
+                return Err(StoreError::InvalidMessageId);
+            }
         }
 
         tx.commit()?;
@@ -296,37 +338,58 @@ impl Store {
         let tx = self.db.begin_read()?;
         let messages = tx.open_table(MESSAGES_TABLE)?;
         let msg_endpoints = tx.open_table(MSG_ENDPOINT_TABLE)?;
+        let groups = tx.open_table(GROUPS_TABLE)?;
+
+        if let Some(group) = groups.get(group_id)? {
+            // make sure they're a member
+            if !group.value().1.contains(&user_id) {
+                return Err(StoreError::PermissionDenied);
+            }
+        } else {
+            return Err(StoreError::InvalidGroupId);
+        }     
         
         let recipient = MessageRecipient::Group(group_id);
         msg_endpoints
             .range((recipient, u16::MIN, u16::MIN)..=(recipient, u16::MAX, u16::MAX))?
             .into_iter()
-        // get the message data
+            // get the message data
             .map(|message| -> Result<Option<Message>> {
-                let message_id = message?.0.value().1;
+                let message_id = message?.0.value().2;
                 let message = messages.get(message_id)?;
                 Ok(message.map(|a| a.value()))
             })
-        // I want to keep errors (so I can surface them)
-        // but I don't care about non existent messages
+            // I want to keep errors (so I can surface them)
+            // but I don't care about non existent messages
             .filter_map(|item| item.transpose())
             .collect()
     }
 
-    /// get all messages sent from user a to user b
+    /// get all messages sent from user a to user b and vice versa
     pub fn get_user_messages(&self, user_a: u16, user_b: u16) -> Result<Vec<Message>> {
         let tx = self.db.begin_read()?;
         let messages = tx.open_table(MESSAGES_TABLE)?;
         let msg_endpoints = tx.open_table(MSG_ENDPOINT_TABLE)?;
 
-        let recipient = MessageRecipient::User(user_id);
+        let user_a_recipient = MessageRecipient::User(user_a);
+        let user_b_recipient = MessageRecipient::User(user_b);
         
-        let mut messages_received = msg_endpoints
-            .range((recipient, u16::MIN, u16::MIN)..=(recipient, u16::MAX, u16::MAX))?
-        .into_iter()
-
-
-        Ok(messages)
+        msg_endpoints
+            // messages from b -> a
+            .range((user_a_recipient, user_b, u16::MIN)..=(user_a_recipient, user_b, u16::MAX))?
+            .into_iter()
+            .chain(
+                // messages from a -> b
+                msg_endpoints
+                    .range((user_b_recipient, user_a, u16::MIN)..=(user_b_recipient, user_a, u16::MAX))?
+                    .into_iter()
+            )
+            .map(|message| {
+                let message_id = message?.0.value().2;
+                Ok(messages.get(message_id)?.map(|m| m.value()))
+            })
+            .filter_map(|message| message.transpose())
+            .collect()
     }
 }
 
@@ -380,14 +443,14 @@ mod tests {
 
         // try creating the group with invalid users
         assert!(matches!(
-            store.create_update_group("foo".into(), vec![0, 1], None),
+            store.create_update_group("foo".into(), vec![0, 1], None, 0),
             Err(StoreError::InvalidUserIds)
         ));
 
         store.create_user("foo".into())?;
 
-        store.create_update_group("foo".into(), vec![0, 1], None)?;
-        store.create_update_group("foobar".into(), vec![1], None)?;
+        store.create_update_group("foo".into(), vec![0, 1], None, 0)?;
+        store.create_update_group("foobar".into(), vec![1], None, 1)?;
 
         let group_0 = (0, ("foo".into(), vec![0, 1]));
         let group_1 = (1, ("foobar".into(), vec![1]));
@@ -403,18 +466,32 @@ mod tests {
         );
 
         // delete a group
-        store.delete_group(0)?;
+        store.delete_group(0, 1)?;
 
         assert_eq!(store.get_groups_for_user(0)?, HashMap::new());
 
         // edit group 1
-        store.create_update_group("bar".into(), vec![0], Some(1))?;
+        store.create_update_group("bar".into(), vec![0], Some(1), 0)?;
 
         assert_eq!(
             store.get_groups_for_user(0)?,
             HashMap::from([(1, ("bar".into(), vec![0]))])
         );
         assert_eq!(store.get_groups_for_user(1)?, HashMap::new());
+
+        Ok(())
+    }
+
+    #[test]
+    fn send_messages() -> Result {
+        let store = Store::init::<PathBuf>(None)?;
+
+        store.create_user("a".into())?;
+        store.create_user("b".into())?;
+        store.create_user("c".into())?;
+        store.create_user("d".into())?;
+
+//        store.create_update_group
 
         Ok(())
     }
