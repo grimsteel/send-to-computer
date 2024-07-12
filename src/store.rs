@@ -1,5 +1,6 @@
 use std::{borrow::Cow, collections::HashMap, fmt::Display, path::Path};
 
+use chrono::Utc;
 use redb::{
     backends::InMemoryBackend, AccessGuard, Database, Key, ReadableTable, TableDefinition,
     TypeName, Value,
@@ -33,7 +34,7 @@ pub struct Message {
     pub sender: u16,
     pub recipient: MessageRecipient,
     pub message: String,
-    pub time: i16,
+    pub time: i64,
     pub tags: Vec<String>
 }
 
@@ -218,7 +219,61 @@ impl Store {
             .collect())
     }
 
+    pub fn send_message(&self, message: String, sender: u16, recipient: MessageRecipient) -> Result<Message> {
+        let tx = self.db.begin_write()?;
 
+        let time = Utc::now().timestamp();
+        let message = Message {
+            message,
+            sender,
+            recipient,
+            time,
+            tags: vec![]
+        };
+
+        {                
+            let mut messages = tx.open_table(MESSAGES_TABLE)?;
+            // add one to last key
+            let id = messages.last()?.map(|v| v.0.value() + 1).unwrap_or_default();
+            messages.insert(id, message.clone())?;
+
+            // add it to the recipients table
+            let mut msg_recipients = tx.open_table(MSG_RECIPIENT_TABLE)?;
+            msg_recipients.insert((recipient, id), ())?;
+        }
+
+        tx.commit()?;
+        Ok(message)
+    }
+
+    pub fn delete_message(&self, id: u16) -> Result<()> {
+        let tx = self.db.begin_write()?;
+
+        {
+            let mut messages = tx.open_table(MESSAGES_TABLE)?;
+            // add one to last key
+            if let Some(message) = messages.remove(id)? {
+                // remove from messages table
+                let mut msg_recipients = tx.open_table(MSG_RECIPIENT_TABLE)?;
+                msg_recipients.remove((message.value().recipient, id))?;
+            };
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn get_messages_for_user(&self, user_id: u16) -> Result<HashMap<String, Vec<Message>>> {
+        let tx = self.db.begin_read()?;
+        let users = tx.open_table(USERS_TABLE)?;
+        
+        let mut messages = HashMap::new();
+        for user in users.iter()? {
+            
+        }
+
+        Ok(messages)
+    }
 }
 
 #[cfg(test)]
