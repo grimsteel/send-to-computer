@@ -244,6 +244,13 @@ impl Store {
     pub fn send_message(&self, message: String, sender: u16, recipient: MessageRecipient) -> Result<Message> {
         let tx = self.db.begin_write()?;
 
+        let users = tx.open_table(USERS_TABLE)?;
+
+        // make sure the sender exists
+        if users.get(sender)?.is_none() {
+            return Err(StoreError::InvalidUserIds);
+        }
+
         // make sure the recepient exists
         match recipient {
             MessageRecipient::Group(group_id) => {                
@@ -259,7 +266,6 @@ impl Store {
                 };
             },
             MessageRecipient::User(user_id) => {
-                let users = tx.open_table(USERS_TABLE)?;
                 if users.get(user_id)?.is_none() {
                     return Err(StoreError::InvalidUserIds);
                 };
@@ -285,6 +291,8 @@ impl Store {
             let mut msg_endpoints = tx.open_table(MSG_ENDPOINT_TABLE)?;
             msg_endpoints.insert((recipient, sender, id), ())?;
         }
+
+        drop(users);
 
         tx.commit()?;
         Ok(message)
@@ -334,7 +342,7 @@ impl Store {
     }
 
     /// get all messages received by this group
-    pub fn get_group_messages(&self, user_id: u16, group_id: u16) -> Result<Vec<Message>> {
+    pub fn get_group_messages(&self, user_id: u16, group_id: u16) -> Result<Vec<(u16, Message)>> {
         let tx = self.db.begin_read()?;
         let messages = tx.open_table(MESSAGES_TABLE)?;
         let msg_endpoints = tx.open_table(MSG_ENDPOINT_TABLE)?;
@@ -354,10 +362,10 @@ impl Store {
             .range((recipient, u16::MIN, u16::MIN)..=(recipient, u16::MAX, u16::MAX))?
             .into_iter()
             // get the message data
-            .map(|message| -> Result<Option<Message>> {
+            .map(|message| -> Result<Option<(u16, Message)>> {
                 let message_id = message?.0.value().2;
                 let message = messages.get(message_id)?;
-                Ok(message.map(|a| a.value()))
+                Ok(message.map(|a| (message_id, a.value())))
             })
             // I want to keep errors (so I can surface them)
             // but I don't care about non existent messages
@@ -366,7 +374,7 @@ impl Store {
     }
 
     /// get all messages sent from user a to user b and vice versa
-    pub fn get_user_messages(&self, user_a: u16, user_b: u16) -> Result<Vec<Message>> {
+    pub fn get_user_messages(&self, user_a: u16, user_b: u16) -> Result<Vec<(u16, Message)>> {
         let tx = self.db.begin_read()?;
         let messages = tx.open_table(MESSAGES_TABLE)?;
         let msg_endpoints = tx.open_table(MSG_ENDPOINT_TABLE)?;
@@ -386,7 +394,7 @@ impl Store {
             )
             .map(|message| {
                 let message_id = message?.0.value().2;
-                Ok(messages.get(message_id)?.map(|m| m.value()))
+                Ok(messages.get(message_id)?.map(|m| (message_id, m.value())))
             })
             .filter_map(|message| message.transpose())
             .collect()
@@ -397,11 +405,11 @@ impl Store {
 mod tests {
     use std::{collections::HashMap, path::PathBuf};
 
-    use crate::store::StoreError;
+    use crate::store::{Message, MessageRecipient, StoreError};
 
     use super::Store;
 
-    type Result = std::result::Result<(), Box<dyn std::error::Error>>;
+    type Result<T=()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
     #[test]
     fn add_users() -> Result {
@@ -449,7 +457,7 @@ mod tests {
 
         store.create_user("foo".into())?;
 
-        store.create_update_group("foo".into(), vec![0, 1], None, 0)?;
+        store.create_update_group("foo".into(), vec![1, 0], None, 0)?;
         store.create_update_group("foobar".into(), vec![1], None, 1)?;
 
         let group_0 = (0, ("foo".into(), vec![0, 1]));
@@ -466,12 +474,22 @@ mod tests {
         );
 
         // delete a group
+        assert!(matches!(
+            // user 0 cannot delete group 1
+            store.delete_group(1, 0),
+            Err(StoreError::PermissionDenied)
+        ));
         store.delete_group(0, 1)?;
 
         assert_eq!(store.get_groups_for_user(0)?, HashMap::new());
 
         // edit group 1
-        store.create_update_group("bar".into(), vec![0], Some(1), 0)?;
+        assert!(matches!(
+            // user 0 cannot delete edit 1
+            store.create_update_group("bar".into(), vec![0], Some(1), 0),
+            Err(StoreError::PermissionDenied)
+        ));
+        store.create_update_group("bar".into(), vec![0], Some(1), 1)?;
 
         assert_eq!(
             store.get_groups_for_user(0)?,
@@ -482,8 +500,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn send_messages() -> Result {
+    fn setup_messages_groups() -> Result<Store> {
         let store = Store::init::<PathBuf>(None)?;
 
         store.create_user("a".into())?;
@@ -491,8 +508,81 @@ mod tests {
         store.create_user("c".into())?;
         store.create_user("d".into())?;
 
-//        store.create_update_group
+        store.create_update_group("1".into(), vec![1, 3], None, 1)?;
+        store.create_update_group("1".into(), vec![3, 2], None, 3)?;
 
+        // make sure the sender/recipients are validated
+        assert!(matches!(
+            store.send_message("foo".into(), 4, MessageRecipient::User(1)),
+            Err(StoreError::InvalidUserIds)
+        ));
+        assert!(matches!(
+            store.send_message("foo".into(), 3, MessageRecipient::Group(2)),
+            Err(StoreError::InvalidGroupId)
+        ));
+        assert!(matches!(
+            store.send_message("foo".into(), 3, MessageRecipient::User(4)),
+            Err(StoreError::InvalidUserIds)
+        ));
+        assert!(matches!(
+            store.send_message("foo".into(), 0, MessageRecipient::Group(1)),
+            Err(StoreError::PermissionDenied)
+        ));
+
+        assert!(matches!(
+            store.send_message("hello".into(), 0, MessageRecipient::User(1))?,
+            Message { sender: 0, recipient: MessageRecipient::User(1), message, .. } if &*message == "hello"
+        ));
+
+        store.send_message("hi".into(), 1, MessageRecipient::User(0))?;
+        store.send_message("aaa".into(), 1, MessageRecipient::User(3))?;
+        store.send_message("bbb".into(), 2, MessageRecipient::Group(1))?;
+        store.send_message("ccc".into(), 3, MessageRecipient::Group(1))?;
+
+        Ok(store)
+    }
+
+    #[test]
+    fn read_message() -> Result {
+        let store = setup_messages_groups()?;
+
+        // messages sent from a to b should be equal to messages sent from b to a
+        let mut messages_a_b = store.get_user_messages(0, 1)?;
+        messages_a_b.sort_unstable_by_key(|a| a.0);
+        let mut messages_b_a = store.get_user_messages(1, 0)?;
+        messages_b_a.sort_unstable_by_key(|a| a.0);
+        assert_eq!(messages_a_b, messages_b_a);
+
+        // these messages should be different
+        let mut messages_d_b = store.get_user_messages(3, 1)?;
+        messages_d_b.sort_unstable_by_key(|a| a.0);
+        assert_ne!(messages_a_b, messages_d_b);
+
+        assert!(matches!(
+            &messages_d_b[..],
+            [(2, Message { sender: 1, recipient: MessageRecipient::User(3), message, .. })] if &*message == "aaa"
+        ));
+
+        // users not in a group can't read the group messages
+        assert!(matches!(
+            store.get_group_messages(1, 1),
+            Err(StoreError::PermissionDenied)
+        ));
+        // group does not exist
+        assert!(matches!(
+            store.get_group_messages(1, 2),
+            Err(StoreError::InvalidGroupId)
+        ));
+
+        assert_eq!(
+            store.get_group_messages(1, 0)?,
+            vec![]
+        );
+        
+        let group_messages_c = store.get_group_messages(2, 1)?;
+        let group_messages_d = store.get_group_messages(3, 1)?;
+        assert_eq!(group_messages_c, group_messages_d);
+        
         Ok(())
     }
 }
