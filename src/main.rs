@@ -8,6 +8,7 @@ use tower_http::services::ServeDir;
 
 mod listener;
 mod store;
+mod websocket;
 
 #[tokio::main]
 async fn main() {
