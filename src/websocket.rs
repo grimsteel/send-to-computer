@@ -2,9 +2,9 @@ use std::{collections::HashMap, path::Path, sync::{Arc, RwLock}};
 
 use axum::extract::ws::{self, WebSocket};
 use futures_util::{stream::SplitSink, SinkExt, StreamExt};
-use log::{error, warn};
+use log::{debug, error, warn};
 use serde::{Deserialize, Serialize};
-use tokio::{select, sync::mpsc::{unbounded_channel, UnboundedSender}};
+use tokio::{select, sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}};
 
 use crate::store::{self, Message, MessageRecipient, Store};
 
@@ -78,82 +78,111 @@ struct ServerGroup {
     members: Vec<String>
 }
 
+pub struct WsHandler {
+    socket: WebSocket,
+    state: Arc<WsState>,
+    user_id: Option<u16>,
+    channel: (UnboundedSender<ServerMessage>, UnboundedReceiver<ServerMessage>)
+}
 
-pub async fn ws_handler(mut socket: WebSocket, state: Arc<WsState>) {
-    let (mut socket_tx, mut socket_rx) = socket.split();
+impl WsHandler {
+    pub fn new(socket: WebSocket, state: Arc<WsState>) -> Self {
+        // setup the channel (but don't update the users map just yet)
+        let channel = unbounded_channel::<ServerMessage>();
+        
+        WsHandler { socket, state, channel, user_id: None }
+    }
 
-    // setup the channel (but don't update the users map just yet)
-    let (channel_tx, mut channel_rx) = unbounded_channel::<ServerMessage>();
+    async fn send_message(&mut self, message: &ServerMessage) {
+        match rmp_serde::to_vec(message) {
+            Ok(data) => {
+                if let Err(err) = self.socket.send(ws::Message::Binary(data)).await {
+                    warn!("Could not sent message: {err}");
+                }
+            },
+            Err(err) => {
+                warn!("Could not encode message: {err}");
+            }
+        }
+    }
 
-    let mut user_id = None;
+    async fn handle_client_message<'a>(&mut self, message: ClientMessage<'a>) {
+        match message {
+            ClientMessage::RequestUsername(username) => {
+                // they can't do this if they're already initialized
+                if self.user_id.is_some() {
+                    warn!("User tried to re-initialize");
+                    return;
+                }
 
-    loop {
-        select! {
-            message = channel_rx.recv() => {
-                // somebody wants us to send a message to this client
-                if let Some(message) = message {
-                    match rmp_serde::to_vec(&message) {
-                        Ok(data) => {
-                            if let Err(err) = socket_tx.send(ws::Message::Binary(data)).await {
-                                warn!("Could not sent message: {err}");
+                //let user = self.state.store.get_username();
+
+                let existing_users = self.state.users.read().unwrap();
+            },
+            other => {
+                warn!("unimplemented: {other:?}");
+            }
+        }
+    }
+
+    pub async fn handle(&mut self) {
+        loop {
+            select! {
+                message = self.channel.1.recv() => {
+                    // somebody wants us to send a message to this client
+                    if let Some(message) = message { self.send_message(&message).await } else { break; }
+                },
+                message = self.socket.next() => {
+                    // message from the client
+                    match message {
+                        None => break,
+                        Some(Ok(message)) => {
+                            match message {
+                                ws::Message::Binary(data) => {
+                                    // decode it
+                                    match rmp_serde::from_slice(&data) {
+                                        Ok(message) => self.handle_client_message(message).await,
+                                        Err(err) => {
+                                            // this isn't a fatal error, but print the message
+                                            warn!("Could not decode message: {err}");
+                                        }
+                                    }
+                                },
+                                // websocket closed
+                                ws::Message::Close(_) => break,
+                                _ => {}
                             }
                         },
-                        Err(err) => {
-                            warn!("Could not encode message: {err}");
+                        Some(Err(err)) => {
+                            error!("Error while receiving message: {err}");
+                            break;
                         }
-                    }
-                } else { break; }
-            },
-            message = socket_rx.next() => {
-                // message from the client
-                match message {
-                    None => break,
-                    Some(Ok(message)) => {
-                        match message {
-                            ws::Message::Binary(data) => {
-                                // decode it
-                                match rmp_serde::from_slice::<ClientMessage>(&data) {
-                                    Ok(message) => {
-                                        
-                                    },
-                                    Err(err) => {
-                                        // this isn't a fatal error, but print the message
-                                        warn!("Could not decode message: {err}");
-                                    }
-                                }
-                            },
-                            // websocket closed
-                            ws::Message::Close(_) => break,
-                            _ => {}
-                        }
-                    },
-                    Some(Err(err)) => {
-                        error!("Error while receiving message: {err}");
-                        break;
                     }
                 }
+                
             }
-            
         }
     }
+}
 
-    // if this user had signed in successfully, we need to tell other clients they left
-    if let Some(id) = user_id {
-        // remove this user
-        {
-            let mut users = state.users.write().unwrap();
-            users.remove(&id);
-        }
+impl Drop for WsHandler {
+    fn drop(&mut self) {
+        // if this user had signed in successfully, we need to tell other clients they left
+        debug!("dropping {}", self.user_id.is_some());
+        if let Some(id) = self.user_id {
+            // remove this user
+            {
+                let mut users = self.state.users.write().unwrap();
+                users.remove(&id);
+            }
 
-        let message = ServerMessage::UserOffline(id);
+            let message = ServerMessage::UserOffline(id);
 
-        // send to each other user
-        let users = state.users.read().unwrap();
-        for user in users.values() {
-            let _ = user.send(message.clone());
+            // send to each other user
+            let users = self.state.users.read().unwrap();
+            for user in users.values() {
+                let _ = user.send(message.clone());
+            }
         }
     }
-
-    //let mut users = state.users.write().unwrap();
-    //users.insert(0, channel_tx);
 }

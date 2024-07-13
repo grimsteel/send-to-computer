@@ -5,7 +5,7 @@ use env_logger::Env;
 use listener::serve;
 use log::error;
 use tower_http::services::ServeDir;
-use websocket::{ws_handler, WsState};
+use websocket::{WsHandler, WsState};
 
 mod listener;
 mod store;
@@ -50,7 +50,10 @@ async fn socket(ws: WebSocketUpgrade, headers: HeaderMap, State(state): State<Ar
     let origin = headers.get(ORIGIN);
     if origin.and_then(|o| o.to_str().ok()).is_some_and(|a| ALLOWED_ORIGINS.contains(&a)) {
         // actually handle this websocket
-        ws.on_upgrade(move |socket| ws_handler(socket, state)).into_response()
+        ws.on_upgrade(move |socket| async {
+            let mut handler = WsHandler::new(socket, state);
+            handler.handle().await;
+        }).into_response()
     } else {
         // not an allowed origin
         StatusCode::FORBIDDEN.into_response()
