@@ -88,7 +88,7 @@ impl Display for StoreError {
 }
 impl std::error::Error for StoreError {}
 
-type Result<T> = std::result::Result<T, StoreError>;
+pub type Result<T> = std::result::Result<T, StoreError>;
 
 pub struct Store {
     db: Database,
