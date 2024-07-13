@@ -1,32 +1,42 @@
-use std::{collections::HashMap, fmt::Display, path::Path};
+use std::{any::type_name, collections::HashMap, fmt::Display, path::Path};
 
 use chrono::Utc;
 use redb::{
     backends::InMemoryBackend,  Database, Key, ReadableTable, TableDefinition,
     TypeName, Value,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-// either a group or a user
+/// adapted from https://github.com/cberner/redb/blob/master/examples/bincode_keys.rs
+#[derive(Debug)]
+struct MsgPackRedb<T>(T);
+
+impl<T> Value for MsgPackRedb<T>
+where
+    T: Serialize + for<'a> Deserialize<'a> + std::fmt::Debug {
+    type SelfType<'a> = T where Self: 'a;
+    type AsBytes<'a> = Vec<u8> where Self: 'a;
+    fn fixed_width() -> Option<usize> { None }
+    fn from_bytes<'a>(data: &'a [u8]) -> T where Self: 'a {
+        rmp_serde::from_slice(data).unwrap()
+    }
+    fn as_bytes<'a, 'b: 'a>(value: &'a T) -> Vec<u8> { rmp_serde::to_vec(value).unwrap() }
+    fn type_name() -> TypeName { TypeName::new(&format!("MsgPackRedb<{}>", type_name::<T>())) }
+}
+
+impl<T> Key for MsgPackRedb<T>
+where
+    T: Ord + std::fmt::Debug + Serialize + DeserializeOwned {
+    fn compare(data1: &[u8], data2: &[u8]) -> std::cmp::Ordering {
+        Self::from_bytes(data1).cmp(&Self::from_bytes(data2))
+    }
+}
+
+/// either a group or a user
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
 pub enum MessageRecipient {
     User(u16),
     Group(u16),
-}
-
-impl Value for MessageRecipient {
-    type SelfType<'a> = Self;
-    type AsBytes<'a> = Vec<u8>;
-    fn fixed_width() -> Option<usize> { None }
-    fn from_bytes<'a>(data: &'a [u8]) -> Self where Self: 'a { bincode::deserialize(data).unwrap() }
-    fn as_bytes<'a, 'b: 'a>(value: &'a Self) -> Vec<u8> { bincode::serialize(value).unwrap() }
-    fn type_name() -> TypeName { TypeName::new("MessageSenderRecipient") }
-}
-
-impl Key for MessageRecipient {
-    fn compare(data1: &[u8], data2: &[u8]) -> std::cmp::Ordering {
-        Self::from_bytes(data1).cmp(&Self::from_bytes(data2))
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
@@ -38,23 +48,14 @@ pub struct Message {
     pub tags: Vec<String>
 }
 
-impl Value for Message {
-    type SelfType<'a> = Self;
-    type AsBytes<'a> = Vec<u8>;
-    fn fixed_width() -> Option<usize> { None }
-    fn from_bytes<'a>(data: &'a [u8]) -> Self where Self: 'a { bincode::deserialize(data).unwrap() }
-    fn as_bytes<'a, 'b: 'a>(value: &'a Self) -> Vec<u8> { bincode::serialize(value).unwrap() }
-    fn type_name() -> TypeName { TypeName::new("Message") }
-}
-
 const USERS_TABLE: TableDefinition<u16, String> = TableDefinition::new("users");
 const GROUPS_TABLE: TableDefinition<u16, (String, Vec<u16>)> = TableDefinition::new("groups");
 const MESSAGES_TABLE: TableDefinition<
     u16,
-    Message,
+    MsgPackRedb<Message>,
 > = TableDefinition::new("messages");
 // (recipient, sender, message id)
-const MSG_ENDPOINT_TABLE: TableDefinition<(MessageRecipient, u16, u16), ()> =
+const MSG_ENDPOINT_TABLE: TableDefinition<(MsgPackRedb<MessageRecipient>, u16, u16), ()> =
     TableDefinition::new("message_senders");
 
 #[derive(Debug)]
