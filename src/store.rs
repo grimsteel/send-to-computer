@@ -5,7 +5,7 @@ use redb::{
     backends::InMemoryBackend,  Database, Key, ReadableTable, TableDefinition,
     TypeName, Value,
 };
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 
 /// adapted from https://github.com/cberner/redb/blob/master/examples/bincode_keys.rs
 #[derive(Debug)]
@@ -26,7 +26,7 @@ where
 
 impl<T> Key for MsgPackRedb<T>
 where
-    T: Ord + std::fmt::Debug + Serialize + DeserializeOwned {
+    T: Ord + std::fmt::Debug + Serialize + for<'a> Deserialize<'a> {
     fn compare(data1: &[u8], data2: &[u8]) -> std::cmp::Ordering {
         Self::from_bytes(data1).cmp(&Self::from_bytes(data2))
     }
@@ -319,7 +319,7 @@ impl Store {
                             if let Some(group) = group {
                                 // make sure they're a member of this group
                                 let users = group.value().1;
-                                users.contains(&sender)
+                                users.contains(&user_id)
                             } else {
                                 // group doesn't exist
                                 false
@@ -414,9 +414,11 @@ impl Store {
 mod tests {
     use std::{collections::HashMap, path::PathBuf};
 
+    use redb::ReadableTableMetadata;
+
     use crate::store::{Message, MessageRecipient, StoreError};
 
-    use super::Store;
+    use super::{Store, MESSAGES_TABLE, MSG_ENDPOINT_TABLE};
 
     type Result<T=()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -552,7 +554,7 @@ mod tests {
     }
 
     #[test]
-    fn read_message() -> Result {
+    fn read_messages() -> Result {
         let store = setup_messages_groups()?;
 
         // messages sent from a to b should be equal to messages sent from b to a
@@ -589,6 +591,65 @@ mod tests {
         let group_messages_d = store.get_group_messages(3, 1)?;
         assert_eq!(group_messages_c, group_messages_d);
         
+        Ok(())
+    }
+
+    fn assert_message_count(store: &Store, count: u16) -> Result {
+        let tx = store.db.begin_read()?;
+        let messages = tx.open_table(MESSAGES_TABLE)?;
+        let message_endpoints = tx.open_table(MSG_ENDPOINT_TABLE)?;
+
+        let message_count = messages.len()?;
+        let message_endpoint_count = message_endpoints.len()?;
+        // make sure they're in sync
+        assert_eq!(message_count, message_endpoint_count);
+        assert_eq!(message_count as u16, count);
+
+        Ok(())
+    }
+
+    #[test]
+    fn delete_group_messages() -> Result {
+        let store = setup_messages_groups()?;
+
+        assert_message_count(&store, 5)?;
+
+        // users that aren't in a group can't delete it
+        assert!(matches!(
+            store.delete_group(0, 2),
+            Err(StoreError::PermissionDenied)
+        ));
+        store.delete_group(0, 1)?;
+
+        assert_message_count(&store, 5)?;
+
+        // delete the group with two messages
+        store.delete_group(1, 2)?;
+        assert_message_count(&store, 3)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn delete_messages() -> Result {
+        let store = setup_messages_groups()?;
+
+        assert_message_count(&store, 5)?;
+        assert!(matches!(
+            store.delete_message(5, 0),
+            Err(StoreError::InvalidMessageId)
+        ));
+        assert!(matches!(
+            store.delete_message(4, 0),
+            Err(StoreError::PermissionDenied)
+        ));
+
+        store.delete_message(4, 2)?;
+        store.delete_message(1, 0)?;
+        store.delete_message(2, 1)?;
+
+        assert_message_count(&store, 2)?;
+
         Ok(())
     }
 }
