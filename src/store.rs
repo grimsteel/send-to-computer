@@ -358,7 +358,7 @@ impl Store {
         }     
         
         let recipient = MessageRecipient::Group(group_id);
-        msg_endpoints
+        let mut messages = msg_endpoints
             .range((recipient, u16::MIN, u16::MIN)..=(recipient, u16::MAX, u16::MAX))?
             .into_iter()
             // get the message data
@@ -370,7 +370,11 @@ impl Store {
             // I want to keep errors (so I can surface them)
             // but I don't care about non existent messages
             .filter_map(|item| item.transpose())
-            .collect()
+            .collect::<Result<Vec<_>>>()?;
+
+        messages.sort_unstable_by_key(|a| a.0);
+
+        Ok(messages)
     }
 
     /// get all messages sent from user a to user b and vice versa
@@ -382,7 +386,7 @@ impl Store {
         let user_a_recipient = MessageRecipient::User(user_a);
         let user_b_recipient = MessageRecipient::User(user_b);
         
-        msg_endpoints
+        let mut messages = msg_endpoints
             // messages from b -> a
             .range((user_a_recipient, user_b, u16::MIN)..=(user_a_recipient, user_b, u16::MAX))?
             .into_iter()
@@ -397,7 +401,11 @@ impl Store {
                 Ok(messages.get(message_id)?.map(|m| (message_id, m.value())))
             })
             .filter_map(|message| message.transpose())
-            .collect()
+            .collect::<Result<Vec<_>>>()?;
+
+        messages.sort_unstable_by_key(|a| a.0);
+
+        Ok(messages)
     }
 }
 
@@ -547,15 +555,12 @@ mod tests {
         let store = setup_messages_groups()?;
 
         // messages sent from a to b should be equal to messages sent from b to a
-        let mut messages_a_b = store.get_user_messages(0, 1)?;
-        messages_a_b.sort_unstable_by_key(|a| a.0);
-        let mut messages_b_a = store.get_user_messages(1, 0)?;
-        messages_b_a.sort_unstable_by_key(|a| a.0);
+        let messages_a_b = store.get_user_messages(0, 1)?;
+        let messages_b_a = store.get_user_messages(1, 0)?;
         assert_eq!(messages_a_b, messages_b_a);
 
         // these messages should be different
-        let mut messages_d_b = store.get_user_messages(3, 1)?;
-        messages_d_b.sort_unstable_by_key(|a| a.0);
+        let messages_d_b = store.get_user_messages(3, 1)?;
         assert_ne!(messages_a_b, messages_d_b);
 
         assert!(matches!(
