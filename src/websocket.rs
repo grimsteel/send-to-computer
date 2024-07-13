@@ -1,14 +1,16 @@
-use std::{collections::HashMap, path::Path, sync::{Arc, Mutex}};
+use std::{collections::HashMap, path::Path, sync::{Arc, RwLock}};
 
 use axum::extract::ws::{self, WebSocket};
-use futures_util::{stream::SplitSink, StreamExt};
+use futures_util::{stream::SplitSink, SinkExt, StreamExt};
+use log::{error, warn};
 use serde::{Deserialize, Serialize};
+use tokio::{select, sync::mpsc::{unbounded_channel, UnboundedSender}};
 
 use crate::store::{self, Message, MessageRecipient, Store};
 
 pub struct WsState {
     store: Store,
-    users: Mutex<HashMap<u16, SplitSink<WebSocket, ws::Message>>>
+    users: RwLock<HashMap<u16, UnboundedSender<ServerMessage>>>
 }
 
 impl WsState {
@@ -16,7 +18,7 @@ impl WsState {
         let store = Store::init(store_path)?;
         Ok(Self {
             store,
-            users: Mutex::new(HashMap::new())
+            users: RwLock::new(HashMap::new())
         })
     }
 }
@@ -39,43 +41,119 @@ enum ClientMessage<'a> {
 }
 
 #[derive(Serialize, Debug, Clone)]
-enum ServerMessage<'a> {
+enum ServerMessage {
     UsernameInUse,
     InvalidUsername, // invalid characters
 
-    Welcome { user_id: u16, users: Vec<ServerUser<'a>>, groups: Vec<ServerGroup<'a>> },
+    Welcome { user_id: u16, users: Vec<ServerUser>, groups: Vec<ServerGroup> },
 
-    UserUpdate(ServerUser<'a>),
+    // a completely new user was added
+    UserAdded(ServerUser),
+    // an existing user joined
+    UserOnline(u16),
+    UserOffline(u16),
         
     MessagesForRecipient { recipient: MessageRecipient, messages: Vec<(u16, Message)> },
     MessageSent(u16, Message),
-    MessageEdited(u16, &'a str),
-    MessageTagsEdited(u16, &'a [&'a str]),
+    MessageEdited(u16, String),
+    MessageTagsEdited(u16, Vec<String>),
     MessageDeleted(u16),
 
-    GroupAdded(ServerGroup<'a>),
-    GroupEdited(ServerGroup<'a>),
+    GroupAdded(ServerGroup),
+    GroupEdited(ServerGroup),
     GroupDeleted(u16)
 }
 
 #[derive(Serialize, Debug, Clone)]
-struct ServerUser<'a> {
+struct ServerUser {
     id: u16,
-    name: &'a str,
+    name: String,
     online: bool
 }
 
 #[derive(Serialize, Debug, Clone)]
-struct ServerGroup<'a> {
+struct ServerGroup {
     id: u16,
-    name: &'a str,
-    members: &'a [&'a str]
+    name: String,
+    members: Vec<String>
 }
 
 
 pub async fn ws_handler(mut socket: WebSocket, state: Arc<WsState>) {
-    let (tx, mut rx) = socket.split();
+    let (mut socket_tx, mut socket_rx) = socket.split();
 
-    let mut users = state.users.lock().expect("can lock mutex");
-    users.insert(0, tx);
+    // setup the channel (but don't update the users map just yet)
+    let (channel_tx, mut channel_rx) = unbounded_channel::<ServerMessage>();
+
+    let mut user_id = None;
+
+    loop {
+        select! {
+            message = channel_rx.recv() => {
+                // somebody wants us to send a message to this client
+                if let Some(message) = message {
+                    match rmp_serde::to_vec(&message) {
+                        Ok(data) => {
+                            if let Err(err) = socket_tx.send(ws::Message::Binary(data)).await {
+                                warn!("Could not sent message: {err}");
+                            }
+                        },
+                        Err(err) => {
+                            warn!("Could not encode message: {err}");
+                        }
+                    }
+                } else { break; }
+            },
+            message = socket_rx.next() => {
+                // message from the client
+                match message {
+                    None => break,
+                    Some(Ok(message)) => {
+                        match message {
+                            ws::Message::Binary(data) => {
+                                // decode it
+                                match rmp_serde::from_slice::<ClientMessage>(&data) {
+                                    Ok(message) => {
+                                        
+                                    },
+                                    Err(err) => {
+                                        // this isn't a fatal error, but print the message
+                                        warn!("Could not decode message: {err}");
+                                    }
+                                }
+                            },
+                            // websocket closed
+                            ws::Message::Close(_) => break,
+                            _ => {}
+                        }
+                    },
+                    Some(Err(err)) => {
+                        error!("Error while receiving message: {err}");
+                        break;
+                    }
+                }
+            }
+            
+        }
+    }
+
+    // if this user had signed in successfully, we need to tell other clients they left
+    if let Some(id) = user_id {
+        // remove this user
+        {
+            let mut users = state.users.write().unwrap();
+            users.remove(&id);
+        }
+
+        let message = ServerMessage::UserOffline(id);
+
+        // send to each other user
+        let users = state.users.read().unwrap();
+        for user in users.values() {
+            let _ = user.send(message.clone());
+        }
+    }
+
+    //let mut users = state.users.write().unwrap();
+    //users.insert(0, channel_tx);
 }
