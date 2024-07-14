@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::Path, sync::{Arc, RwLock}};
+use std::{collections::HashMap, fmt::Display, path::Path, sync::{Arc, RwLock}};
 
 use axum::extract::ws::{self, WebSocket};
 use futures_util::{stream::SplitSink, SinkExt, StreamExt};
@@ -6,7 +6,7 @@ use log::{debug, error, warn};
 use serde::{Deserialize, Serialize};
 use tokio::{select, sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}};
 
-use crate::store::{self, Message, MessageRecipient, Store};
+use crate::store::{self, Message, MessageRecipient, Store, StoreError};
 
 pub struct WsState {
     store: Store,
@@ -42,8 +42,7 @@ enum ClientMessage<'a> {
 
 #[derive(Serialize, Debug, Clone)]
 enum ServerMessage {
-    UsernameInUse,
-    InvalidUsername, // invalid characters
+    Error(String),
 
     Welcome { user_id: u16, users: Vec<ServerUser>, groups: Vec<ServerGroup> },
 
@@ -62,6 +61,26 @@ enum ServerMessage {
     GroupAdded(ServerGroup),
     GroupEdited(ServerGroup),
     GroupDeleted(u16)
+}
+
+/// errors that get sent to the client
+#[derive(Debug)]
+enum ServerError {
+    UsernameInUse,
+    InvalidUsername, // invalid characters
+    StoreError(StoreError)
+}
+
+impl From<StoreError> for ServerError { fn from(v: StoreError) -> Self { Self::StoreError(v) } }
+
+impl Display for ServerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UsernameInUse => write!(f, "Someone has already logged in with that username"),
+            Self::InvalidUsername => write!(f, "Username may only contain alphanumeric characters"),
+            Self::StoreError(err) => write!(f, "Store error: {err}")
+        }
+    }
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -106,23 +125,45 @@ impl WsHandler {
         }
     }
 
-    async fn handle_client_message<'a>(&mut self, message: ClientMessage<'a>) {
+    async fn handle_client_message<'a>(&mut self, message: ClientMessage<'a>) -> Result<(), ServerError> {
         match message {
-            ClientMessage::RequestUsername(username) => {
+            ClientMessage::RequestUsername(requested_username) => {
                 // they can't do this if they're already initialized
                 if self.user_id.is_some() {
                     warn!("User tried to re-initialize");
-                    return;
+                    return Ok(());
                 }
 
-                //let user = self.state.store.get_username();
+                // make sure all characters are valid
+                if !requested_username.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
+                {
+                    return Err(ServerError::InvalidUsername);
+                }
 
-                let existing_users = self.state.users.read().unwrap();
+                let mut is_existing_username = false;
+                {
+                    // if any of the existing users have the same username
+                    let existing_users = self.state.users.read().unwrap();
+                    for username in existing_users
+                        .keys()
+                        .filter_map(|&user_id| self.state.store.get_username(user_id).transpose())
+                    {
+                        if username? == requested_username {
+                            is_existing_username = true;
+                            break;
+                        }
+                    }
+                }
+                if is_existing_username {
+                    return Err(ServerError::UsernameInUse);
+                }
             },
             other => {
                 warn!("unimplemented: {other:?}");
             }
         }
+        Ok(())
     }
 
     pub async fn handle(&mut self) {
@@ -141,7 +182,14 @@ impl WsHandler {
                                 ws::Message::Binary(data) => {
                                     // decode it
                                     match rmp_serde::from_slice(&data) {
-                                        Ok(message) => self.handle_client_message(message).await,
+                                        Ok(message) => {
+                                            if let Err(err) = self.handle_client_message(message).await {
+                                                warn!("Error while processing message: {err}");
+                                                // also send this error to the client
+                                                let message = ServerMessage::Error(format!("{err}"));
+                                                self.send_message(&message).await;
+                                            }
+                                        },
                                         Err(err) => {
                                             // this isn't a fatal error, but print the message
                                             warn!("Could not decode message: {err}");

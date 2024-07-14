@@ -49,6 +49,7 @@ pub struct Message {
 }
 
 const USERS_TABLE: TableDefinition<u16, String> = TableDefinition::new("users");
+const USERS_TABLE_REVERSE: TableDefinition<String, u16> = TableDefinition::new("users_reverse");
 const GROUPS_TABLE: TableDefinition<u16, (String, Vec<u16>)> = TableDefinition::new("groups");
 const MESSAGES_TABLE: TableDefinition<
     u16,
@@ -64,6 +65,7 @@ pub enum StoreError {
     InvalidUserIds,
     InvalidGroupId,
     InvalidMessageId,
+    UsernameInUse,
     PermissionDenied
 }
 
@@ -82,7 +84,8 @@ impl Display for StoreError {
             StoreError::InvalidUserIds => write!(f, "Invalid user ID(s)"),
             StoreError::InvalidGroupId => write!(f, "Invalid group ID"),
             StoreError::InvalidMessageId => write!(f, "Invalid message ID"),
-            StoreError::PermissionDenied => write!(f, "Permission denied")
+            StoreError::PermissionDenied => write!(f, "Permission denied"),
+            StoreError::UsernameInUse => write!(f, "Username is already in use")
         }
     }
 }
@@ -119,9 +122,17 @@ impl Store {
         let tx = self.db.begin_write()?;
         {
             let mut users = tx.open_table(USERS_TABLE)?;
+            let mut users_reverse = tx.open_table(USERS_TABLE_REVERSE)?;
+
+            // make sure this username isn't already used
+            if users_reverse.get(&username)?.is_some() {
+                return Err(StoreError::UsernameInUse);
+            }
+            
             // add one to last key
             let user_id = users.last()?.map(|v| v.0.value() + 1).unwrap_or_default();
-            users.insert(user_id, username)?;
+            users.insert(user_id, username.clone())?;
+            users_reverse.insert(username, user_id)?;
         }
         tx.commit()?;
         Ok(())
