@@ -112,6 +112,7 @@ impl WsHandler {
         WsHandler { socket, state, channel, user_id: None }
     }
 
+    /// send a ServerMessage to our client
     async fn send_message(&mut self, message: &ServerMessage) {
         match rmp_serde::to_vec(message) {
             Ok(data) => {
@@ -122,6 +123,13 @@ impl WsHandler {
             Err(err) => {
                 warn!("Could not encode message: {err}");
             }
+        }
+    }
+
+    /// send a broadcast message to all clients in the map
+    fn send_broadcast(&self, message: ServerMessage) {
+        for client in self.state.users.read().unwrap().values() {
+            let _ = client.send(message.clone());
         }
     }
 
@@ -141,23 +149,31 @@ impl WsHandler {
                     return Err(ServerError::InvalidUsername);
                 }
 
-                let mut is_existing_username = false;
-                {
-                    // if any of the existing users have the same username
-                    let existing_users = self.state.users.read().unwrap();
-                    for username in existing_users
-                        .keys()
-                        .filter_map(|&user_id| self.state.store.get_username(user_id).transpose())
+                let existing_user_id = self.state.store.get_id_for_username(requested_username)?;
+                if let Some(id) = existing_user_id {
                     {
-                        if username? == requested_username {
-                            is_existing_username = true;
-                            break;
+                        // see if a user with that ID already exists
+                        // TODO: ip-based kicking to help with "ghosts" users that never properly disconnected
+                        let mut users = self.state.users.write().unwrap();
+                        if users.contains_key(&id) {
+                            return Err(ServerError::UsernameInUse);
                         }
+                        
+                        // add to client map
+                        users.insert(id, self.channel.0.clone());
                     }
+
+                    self.send_broadcast(ServerMessage::UserOnline(id));
+
+                    // TODO: existing users and groups
+                    let message = ServerMessage::Welcome { user_id: id, users: vec![], groups: vec![] };
+                    self.send_message(&message).await;
+                } else {
+                    // create user
+                    let id = self.state.store.create_user(requested_username.into())?;
                 }
-                if is_existing_username {
-                    return Err(ServerError::UsernameInUse);
-                }
+
+                
             },
             other => {
                 warn!("unimplemented: {other:?}");
@@ -225,12 +241,7 @@ impl Drop for WsHandler {
             }
 
             let message = ServerMessage::UserOffline(id);
-
-            // send to each other user
-            let users = self.state.users.read().unwrap();
-            for user in users.values() {
-                let _ = user.send(message.clone());
-            }
+            self.send_broadcast(message);
         }
     }
 }
