@@ -49,7 +49,7 @@ pub struct Message {
 }
 
 const USERS_TABLE: TableDefinition<u16, String> = TableDefinition::new("users");
-const USERS_TABLE_REVERSE: TableDefinition<String, u16> = TableDefinition::new("users_reverse");
+const USERS_TABLE_REVERSE: TableDefinition<&str, u16> = TableDefinition::new("users_reverse");
 const GROUPS_TABLE: TableDefinition<u16, (String, Vec<u16>)> = TableDefinition::new("groups");
 const MESSAGES_TABLE: TableDefinition<
     u16,
@@ -108,7 +108,7 @@ impl Store {
         Ok(Self { db })
     }
 
-    pub fn get_username(&self, id: u16) -> Result<Option<String>> {
+    pub fn get_username_for_id(&self, id: u16) -> Result<Option<String>> {
         let tx = self.db.begin_read()?;
         match tx.open_table(USERS_TABLE) {
             Ok(users) => Ok(users.get(id)?.map(|v| v.value())),
@@ -118,24 +118,35 @@ impl Store {
         }
     }
 
-    pub fn create_user(&self, username: String) -> Result<()> {
+    pub fn get_id_for_username(&self, username: &str) -> Result<Option<u16>> {
+        let tx = self.db.begin_read()?;
+        match tx.open_table(USERS_TABLE_REVERSE) {
+            Ok(users) => Ok(users.get(username)?.map(|v| v.value())),
+            // if the table doesn't exist just return None
+            Err(redb::TableError::TableDoesNotExist(_)) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn create_user(&self, username: String) -> Result<u16> {
         let tx = self.db.begin_write()?;
+        let user_id;
         {
             let mut users = tx.open_table(USERS_TABLE)?;
             let mut users_reverse = tx.open_table(USERS_TABLE_REVERSE)?;
 
             // make sure this username isn't already used
-            if users_reverse.get(&username)?.is_some() {
+            if users_reverse.get(&*username)?.is_some() {
                 return Err(StoreError::UsernameInUse);
             }
             
             // add one to last key
-            let user_id = users.last()?.map(|v| v.0.value() + 1).unwrap_or_default();
-            users.insert(user_id, username.clone())?;
-            users_reverse.insert(username, user_id)?;
+            user_id = users.last()?.map(|v| v.0.value() + 1).unwrap_or_default();
+            users_reverse.insert(&*username, user_id)?;
+            users.insert(user_id, username)?;
         }
         tx.commit()?;
-        Ok(())
+        Ok(user_id)
     }
 
     pub fn list_users(&self) -> Result<HashMap<u16, String>> {
@@ -437,15 +448,19 @@ mod tests {
     fn add_users() -> Result {
         let store = Store::init::<PathBuf>(None)?;
 
-        assert!(store.get_username(0)?.is_none());
+        assert!(store.get_username_for_id(0)?.is_none());
 
         // add a user
         store.create_user("foobar".into())?;
 
         // make sure they exist
         assert_eq!(
-            store.get_username(0)?.as_ref().map(|a| a.as_str()),
+            store.get_username_for_id(0)?.as_ref().map(|a| a.as_str()),
             Some("foobar")
+        );
+        assert_eq!(
+            store.get_id_for_username("foobar")?,
+            Some(0)
         );
 
         // add another user
@@ -453,9 +468,19 @@ mod tests {
 
         // make sure they exist
         assert_eq!(
-            store.get_username(1)?.as_ref().map(|a| a.as_str()),
+            store.get_username_for_id(1)?.as_ref().map(|a| a.as_str()),
             Some("foo")
         );
+        assert_eq!(
+            store.get_id_for_username("foo")?,
+            Some(1)
+        );
+
+        // make sure you can't create a user with an existing username
+        assert!(matches!(
+            store.create_user("foo".into()),
+            Err(StoreError::UsernameInUse)
+        ));
 
         assert_eq!(
             store.list_users()?,
