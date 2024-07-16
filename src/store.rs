@@ -1,4 +1,4 @@
-use std::{any::type_name, collections::HashMap, fmt::Display, path::Path};
+use std::{any::type_name, collections::{HashMap, HashSet}, fmt::Display, path::Path};
 
 use chrono::Utc;
 use redb::{
@@ -50,7 +50,7 @@ pub struct Message {
 
 const USERS_TABLE: TableDefinition<u16, String> = TableDefinition::new("users");
 const USERS_TABLE_REVERSE: TableDefinition<&str, u16> = TableDefinition::new("users_reverse");
-const GROUPS_TABLE: TableDefinition<u16, (String, Vec<u16>)> = TableDefinition::new("groups");
+const GROUPS_TABLE: TableDefinition<u16, (String, MsgPackRedb<HashSet<u16>>)> = TableDefinition::new("groups");
 const MESSAGES_TABLE: TableDefinition<
     u16,
     MsgPackRedb<Message>,
@@ -169,7 +169,7 @@ impl Store {
     pub fn create_update_group(
         &self,
         name: String,
-        mut users: Vec<u16>,
+        users: HashSet<u16>,
         group_id: Option<u16>,
         user_id: u16
     ) -> Result<()> {
@@ -199,9 +199,6 @@ impl Store {
             {
                 return Err(StoreError::InvalidUserIds);
             }
-
-            // sort the users so we can do binary search
-            users.sort_unstable();
 
             groups.insert(group_id, (name, users))?;
         }
@@ -241,7 +238,7 @@ impl Store {
         Ok(())
     }
 
-    pub fn get_groups_for_user(&self, user_id: u16) -> Result<HashMap<u16, (String, Vec<u16>)>> {
+    pub fn get_groups_for_user(&self, user_id: u16) -> Result<HashMap<u16, (String, HashSet<u16>)>> {
         let tx = self.db.begin_read()?;
 
         // make sure the user exists
@@ -258,7 +255,7 @@ impl Store {
                 let v = v.ok()?;
                 let group = v.1.value();
                 // make sure they're a part of this group
-                group.1.binary_search(&user_id).ok()?;
+                if !group.1.contains(&user_id) { return None };
                 Some((v.0.value(), (group.0.into(), group.1)))
             })
             .collect())
@@ -442,7 +439,7 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, path::PathBuf};
+    use std::{collections::{HashMap, HashSet}, path::PathBuf};
 
     use redb::ReadableTableMetadata;
 
@@ -506,17 +503,17 @@ mod tests {
 
         // try creating the group with invalid users
         assert!(matches!(
-            store.create_update_group("foo".into(), vec![0, 1], None, 0),
+            store.create_update_group("foo".into(), HashSet::from([0, 1]), None, 0),
             Err(StoreError::InvalidUserIds)
         ));
 
         store.create_user("foo".into())?;
 
-        store.create_update_group("foo".into(), vec![1, 0], None, 0)?;
-        store.create_update_group("foobar".into(), vec![1], None, 1)?;
+        store.create_update_group("foo".into(), HashSet::from([1, 0]), None, 0)?;
+        store.create_update_group("foobar".into(), HashSet::from([1]), None, 1)?;
 
-        let group_0 = (0, ("foo".into(), vec![0, 1]));
-        let group_1 = (1, ("foobar".into(), vec![1]));
+        let group_0 = (0, ("foo".into(), HashSet::from([0, 1])));
+        let group_1 = (1, ("foobar".into(), HashSet::from([1])));
 
         // make sure we can read the groups for each user
         assert_eq!(
@@ -541,14 +538,14 @@ mod tests {
         // edit group 1
         assert!(matches!(
             // user 0 cannot delete edit 1
-            store.create_update_group("bar".into(), vec![0], Some(1), 0),
+            store.create_update_group("bar".into(), HashSet::from([0]), Some(1), 0),
             Err(StoreError::PermissionDenied)
         ));
-        store.create_update_group("bar".into(), vec![0], Some(1), 1)?;
+        store.create_update_group("bar".into(), HashSet::from([0]), Some(1), 1)?;
 
         assert_eq!(
             store.get_groups_for_user(0)?,
-            HashMap::from([(1, ("bar".into(), vec![0]))])
+            HashMap::from([(1, ("bar".into(), HashSet::from([0])))])
         );
         assert_eq!(store.get_groups_for_user(1)?, HashMap::new());
 
@@ -563,8 +560,8 @@ mod tests {
         store.create_user("c".into())?;
         store.create_user("d".into())?;
 
-        store.create_update_group("1".into(), vec![1, 3], None, 1)?;
-        store.create_update_group("1".into(), vec![3, 2], None, 3)?;
+        store.create_update_group("1".into(), HashSet::from([1, 3]), None, 1)?;
+        store.create_update_group("1".into(), HashSet::from([3, 2]), None, 3)?;
 
         // make sure the sender/recipients are validated
         assert!(matches!(
