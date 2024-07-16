@@ -330,6 +330,60 @@ impl Store {
         Ok((id, message))
     }
 
+    pub fn edit_message(&self, message_id: u16, new_message: String, user_id: u16) -> Result<Option<Message>> {
+        let tx = self.db.begin_write()?;
+
+        let mut message;
+
+        {
+            let mut messages = tx.open_table(MESSAGES_TABLE)?;
+            
+            // make sure they're allowed to delete this message
+            message = messages.get(message_id)?.map(|a| a.value());
+            if let Some(message) = &mut message {
+                if message.sender != user_id {
+                    // only the sender can edit
+                    return Err(StoreError::PermissionDenied);
+                }
+                // actually edit the message
+                message.message = new_message;
+                messages.insert(message_id, message.clone())?;
+            } else {
+                return Err(StoreError::InvalidMessageId);
+            }
+        }
+
+        tx.commit()?;
+        Ok(message)
+    }
+
+    pub fn edit_message_tags(&self, message_id: u16, new_tags: Vec<String>, user_id: u16) -> Result<Option<Message>> {
+        let tx = self.db.begin_write()?;
+
+        let mut message;
+
+        {
+            let mut messages = tx.open_table(MESSAGES_TABLE)?;
+            
+            // make sure they're allowed to delete this message
+            message = messages.get(message_id)?.map(|a| a.value());
+            if let Some(message) = &mut message {
+                if message.sender != user_id {
+                    // only the sender can edit
+                    return Err(StoreError::PermissionDenied);
+                }
+                // actually edit the message
+                message.tags = new_tags;
+                messages.insert(message_id, message.clone())?;
+            } else {
+                return Err(StoreError::InvalidMessageId);
+            }
+        }
+
+        tx.commit()?;
+        Ok(message)
+    }
+
     pub fn delete_message(&self, message_id: u16, user_id: u16) -> Result<Option<Message>> {
         let tx = self.db.begin_write()?;
 
