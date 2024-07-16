@@ -152,15 +152,18 @@ impl WsHandler {
                     return Err(ServerError::InvalidUsername);
                 }
 
-                let state_2 = self.state.clone();
+                let state = self.state.clone();
                 let username: String = requested_username.into();
+
+                // get a user id for this username
+                // (depends on whether this user already existed or not)
                 let (user_id, broadcast_message) = spawn_blocking(move || {
-                    let existing_user_id = state_2.store.get_id_for_username(&username)?;
+                    let existing_user_id = state.store.get_id_for_username(&username)?;
                     if let Some(id) = existing_user_id {
                         {
                             // see if a user with that ID already exists
                             // TODO: ip-based kicking to help with "ghosts" users that never properly disconnected
-                            let users = state_2.users.read().unwrap();
+                            let users = state.users.read().unwrap();
                             if users.contains_key(&id) {
                                 return Err(ServerError::UsernameInUse);
                             }
@@ -169,7 +172,7 @@ impl WsHandler {
                         Ok((id, ServerMessage::UserOnline(id)))
                     } else {
                         // create user
-                        let id = state_2.store.create_user(username.clone())?;
+                        let id = state.store.create_user(username.clone())?;
 
                         let user = ServerUser { id, name: username, online: true };
 
@@ -180,14 +183,15 @@ impl WsHandler {
                 self.send_broadcast(broadcast_message);
 
                 self.state.users.write().unwrap().insert(user_id, self.channel.0.clone());
+                self.user_id = Some(user_id);
 
                 // get existing users
-                let state_2 = self.state.clone();
+                let state = self.state.clone();
                 let (users, groups) = spawn_blocking(move || -> Result<_, ServerError> {
-                    let online_users = state_2.users.read().unwrap();
-                    let users = state_2.store.list_users()?;
+                    let online_users = state.users.read().unwrap();
+                    let users = state.store.list_users()?;
                     // list all  groups they belong to
-                    let groups = state_2.store.get_groups_for_user(user_id)?.into_iter()
+                    let groups = state.store.get_groups_for_user(user_id)?.into_iter()
                         .map(|(id, (name, members))| {
                             ServerGroup {
                                 id,
@@ -215,6 +219,18 @@ impl WsHandler {
 
                 let welcome = ServerMessage::Welcome { user_id, users, groups };
                 self.send_message(&welcome).await;
+            },
+            ClientMessage::GetMessages(recipient) => {
+                // they can't do this if they haven't initialized
+                if let Some(id) = self.user_id {
+                    let state = self.state.clone();
+                    // retrieve the messages from the store
+                    let messages = spawn_blocking(move || state.store.get_messages(id, recipient)).await??;
+                    let messages = ServerMessage::MessagesForRecipient { recipient, messages };
+                    self.send_message(&messages).await;
+                } else {
+                    warn!("Uninitialized user");
+                }
             },
             other => {
                 warn!("unimplemented: {other:?}");
