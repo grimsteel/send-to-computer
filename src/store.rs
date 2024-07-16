@@ -365,7 +365,7 @@ impl Store {
     }
 
     /// get all messages received by this group
-    pub fn get_group_messages(&self, user_id: u16, group_id: u16) -> Result<Vec<(u16, Message)>> {
+    fn get_group_messages(&self, user_id: u16, group_id: u16) -> Result<Vec<(u16, Message)>> {
         let tx = self.db.begin_read()?;
         let messages = tx.open_table(MESSAGES_TABLE)?;
         let msg_endpoints = tx.open_table(MSG_ENDPOINT_TABLE)?;
@@ -401,7 +401,7 @@ impl Store {
     }
 
     /// get all messages sent from user a to user b and vice versa
-    pub fn get_user_messages(&self, user_a: u16, user_b: u16) -> Result<Vec<(u16, Message)>> {
+    fn get_user_messages(&self, user_a: u16, user_b: u16) -> Result<Vec<(u16, Message)>> {
         let tx = self.db.begin_read()?;
         let messages = tx.open_table(MESSAGES_TABLE)?;
         let msg_endpoints = tx.open_table(MSG_ENDPOINT_TABLE)?;
@@ -429,6 +429,14 @@ impl Store {
         messages.sort_unstable_by_key(|a| a.0);
 
         Ok(messages)
+    }
+
+    /// get all messages between the given user and recipient
+    pub fn get_messages(&self, user_id: u16, recipient: MessageRecipient) -> Result<Vec<(u16, Message)>> {
+        match recipient {
+            MessageRecipient::User(recipient_id) => self.get_user_messages(user_id, recipient_id),
+            MessageRecipient::Group(group_id) => self.get_group_messages(user_id, group_id)
+        }
     }
 }
 
