@@ -238,6 +238,16 @@ impl Store {
         Ok(())
     }
 
+    pub fn get_group_members(&self, group_id: u16) -> Result<Option<HashSet<u16>>> {
+        let tx = self.db.begin_read()?;
+        let groups = tx.open_table(GROUPS_TABLE)?;
+        if let Some(group) = groups.get(group_id)? {
+            Ok(Some(group.value().1.clone()))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn get_groups_for_user(&self, user_id: u16) -> Result<HashMap<u16, (String, HashSet<u16>)>> {
         let tx = self.db.begin_read()?;
 
@@ -261,7 +271,7 @@ impl Store {
             .collect())
     }
 
-    pub fn send_message(&self, message: String, sender: u16, recipient: MessageRecipient) -> Result<Message> {
+    pub fn send_message(&self, message: String, sender: u16, recipient: MessageRecipient) -> Result<(u16, Message)> {
         let tx = self.db.begin_write()?;
 
         let users = tx.open_table(USERS_TABLE)?;
@@ -301,10 +311,12 @@ impl Store {
             tags: vec![]
         };
 
+        let id;
+
         {                
             let mut messages = tx.open_table(MESSAGES_TABLE)?;
             // add one to last key
-            let id = messages.last()?.map(|v| v.0.value() + 1).unwrap_or_default();
+            id = messages.last()?.map(|v| v.0.value() + 1).unwrap_or_default();
             messages.insert(id, message.clone())?;
 
             // add it to the endpoints table
@@ -315,18 +327,20 @@ impl Store {
         drop(users);
 
         tx.commit()?;
-        Ok(message)
+        Ok((id, message))
     }
 
-    pub fn delete_message(&self, message_id: u16, user_id: u16) -> Result<()> {
+    pub fn delete_message(&self, message_id: u16, user_id: u16) -> Result<Option<Message>> {
         let tx = self.db.begin_write()?;
+
+        let message;
 
         {
             let mut messages = tx.open_table(MESSAGES_TABLE)?;
             let mut msg_endpoints = tx.open_table(MSG_ENDPOINT_TABLE)?;
             
             // make sure they're allowed to delete this message
-            let message = messages.get(message_id)?.map(|a| a.value());
+            message = messages.get(message_id)?.map(|a| a.value());
             if let Some(Message { sender, recipient, .. }) = message {
                 if sender != user_id {
                     // check if they're the recipient
@@ -358,7 +372,7 @@ impl Store {
         }
 
         tx.commit()?;
-        Ok(())
+        Ok(message)
     }
 
     /// get all messages received by this group
@@ -583,7 +597,7 @@ mod tests {
 
         assert!(matches!(
             store.send_message("hello".into(), 0, MessageRecipient::User(1))?,
-            Message { sender: 0, recipient: MessageRecipient::User(1), message, .. } if &*message == "hello"
+            (0, Message { sender: 0, recipient: MessageRecipient::User(1), message, .. }) if &*message == "hello"
         ));
 
         store.send_message("hi".into(), 1, MessageRecipient::User(0))?;

@@ -4,7 +4,7 @@ use axum::extract::ws::{self, WebSocket};
 use futures_util::StreamExt;
 use log::{debug, error, warn};
 use serde::{Deserialize, Serialize};
-use tokio::{select, sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, task::{spawn_blocking, JoinError}};
+use tokio::{select, sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender, error::SendError}, task::{spawn_blocking, JoinError}};
 
 use crate::store::{self, Message, MessageRecipient, Store, StoreError};
 
@@ -69,19 +69,22 @@ enum ServerError {
     UsernameInUse,
     InvalidUsername, // invalid characters
     StoreError(StoreError),
-    JoinError(JoinError)
+    JoinError(JoinError),
+    SendError(SendError<ServerMessage>)
 }
 
 impl From<StoreError> for ServerError { fn from(v: StoreError) -> Self { Self::StoreError(v) } }
 impl From<JoinError> for ServerError { fn from (v: JoinError) -> Self { Self::JoinError(v) } }
+impl From<SendError<ServerMessage>> for ServerError { fn from (v: SendError<ServerMessage>) -> Self { Self::SendError(v) } }
 
 impl Display for ServerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UsernameInUse => write!(f, "Someone has already logged in with that username"),
             Self::InvalidUsername => write!(f, "Username may only contain alphanumeric characters"),
-            Self::JoinError(err) => write!(f, "Join error: {err}"),
-            Self::StoreError(err) => write!(f, "Store error: {err}")
+            Self::JoinError(err) => write!(f, "Error while joining threads: {err}"),
+            Self::StoreError(err) => write!(f, "Store error: {err}"),
+            Self::SendError(err) => write!(f, "Error while sending message: {err}")
         }
     }
 }
@@ -134,6 +137,34 @@ impl WsHandler {
         for client in self.state.users.read().unwrap().values() {
             let _ = client.send(message.clone());
         }
+    }
+
+    /// send a broadcast message to all clients in the map that match the recipient
+    async fn send_to_recipient(&mut self, message: ServerMessage, recipient: MessageRecipient) -> Result<(), ServerError> {
+        match recipient {
+            MessageRecipient::User(user_id) => {
+                // send it to our user too
+                self.send_message(&message).await;
+                
+                // if this user is in the map, send to them
+                if let Some(client) = self.state.users.read().unwrap().get(&user_id) {
+                    client.send(message)?;
+                }
+            },
+            MessageRecipient::Group(group_id) => {
+                let state = self.state.clone();
+                if let Some(members) = spawn_blocking(move || state.store.get_group_members(group_id)).await?? {
+                    // send the message to each user in the group
+                    let users = self.state.users.read().unwrap();
+                    for member in members {
+                        if let Some(client) = users.get(&member) {
+                            client.send(message.clone())?;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     async fn handle_client_message<'a>(&mut self, message: ClientMessage<'a>) -> Result<(), ServerError> {
@@ -228,6 +259,31 @@ impl WsHandler {
                     let messages = spawn_blocking(move || state.store.get_messages(id, recipient)).await??;
                     let messages = ServerMessage::MessagesForRecipient { recipient, messages };
                     self.send_message(&messages).await;
+                } else {
+                    warn!("Uninitialized user");
+                }
+            },
+            ClientMessage::SendMessage { message, recipient } => {
+                // they can't do this if they haven't initialized
+                if let Some(id) = self.user_id {
+                    let state = self.state.clone();
+                    let message = message.into();
+                    let (id, message) = spawn_blocking(move || state.store.send_message(message, id, recipient)).await??; 
+                    let server_message = ServerMessage::MessageSent(id, message);
+                    self.send_to_recipient(server_message, recipient).await?;
+                } else {
+                    warn!("Uninitialized user");
+                }
+            },
+            ClientMessage::DeleteMessage(id) => {
+                // they can't do this if they haven't initialized
+                if let Some(user_id) = self.user_id {
+                    let state = self.state.clone();
+                    if let Some(message) = spawn_blocking(move || state.store.delete_message(id, user_id)).await?? {
+                        // notify all recipients that it was deleted
+                        let server_message = ServerMessage::MessageDeleted(id);
+                        self.send_to_recipient(server_message, message.recipient).await?;
+                    }
                 } else {
                     warn!("Uninitialized user");
                 }
