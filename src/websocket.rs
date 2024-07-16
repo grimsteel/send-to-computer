@@ -1,10 +1,10 @@
 use std::{collections::HashMap, fmt::Display, path::Path, sync::{Arc, RwLock}};
 
 use axum::extract::ws::{self, WebSocket};
-use futures_util::{stream::SplitSink, SinkExt, StreamExt};
+use futures_util::StreamExt;
 use log::{debug, error, warn};
 use serde::{Deserialize, Serialize};
-use tokio::{select, sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}};
+use tokio::{select, sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, task::{spawn_blocking, JoinError}};
 
 use crate::store::{self, Message, MessageRecipient, Store, StoreError};
 
@@ -68,16 +68,19 @@ enum ServerMessage {
 enum ServerError {
     UsernameInUse,
     InvalidUsername, // invalid characters
-    StoreError(StoreError)
+    StoreError(StoreError),
+    JoinError(JoinError)
 }
 
 impl From<StoreError> for ServerError { fn from(v: StoreError) -> Self { Self::StoreError(v) } }
+impl From<JoinError> for ServerError { fn from (v: JoinError) -> Self { Self::JoinError(v) } }
 
 impl Display for ServerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UsernameInUse => write!(f, "Someone has already logged in with that username"),
             Self::InvalidUsername => write!(f, "Username may only contain alphanumeric characters"),
+            Self::JoinError(err) => write!(f, "Join error: {err}"),
             Self::StoreError(err) => write!(f, "Store error: {err}")
         }
     }
@@ -149,31 +152,69 @@ impl WsHandler {
                     return Err(ServerError::InvalidUsername);
                 }
 
-                let existing_user_id = self.state.store.get_id_for_username(requested_username)?;
-                if let Some(id) = existing_user_id {
-                    {
-                        // see if a user with that ID already exists
-                        // TODO: ip-based kicking to help with "ghosts" users that never properly disconnected
-                        let mut users = self.state.users.write().unwrap();
-                        if users.contains_key(&id) {
-                            return Err(ServerError::UsernameInUse);
+                let state_2 = self.state.clone();
+                let username: String = requested_username.into();
+                let (user_id, broadcast_message) = spawn_blocking(move || {
+                    let existing_user_id = state_2.store.get_id_for_username(&username)?;
+                    if let Some(id) = existing_user_id {
+                        {
+                            // see if a user with that ID already exists
+                            // TODO: ip-based kicking to help with "ghosts" users that never properly disconnected
+                            let users = state_2.users.read().unwrap();
+                            if users.contains_key(&id) {
+                                return Err(ServerError::UsernameInUse);
+                            }
                         }
-                        
-                        // add to client map
-                        users.insert(id, self.channel.0.clone());
+
+                        Ok((id, ServerMessage::UserOnline(id)))
+                    } else {
+                        // create user
+                        let id = state_2.store.create_user(username.clone())?;
+
+                        let user = ServerUser { id, name: username, online: true };
+
+                        Ok((id, ServerMessage::UserAdded(user)))
                     }
+                }).await??;
 
-                    self.send_broadcast(ServerMessage::UserOnline(id));
+                self.send_broadcast(broadcast_message);
 
-                    // TODO: existing users and groups
-                    let message = ServerMessage::Welcome { user_id: id, users: vec![], groups: vec![] };
-                    self.send_message(&message).await;
-                } else {
-                    // create user
-                    let id = self.state.store.create_user(requested_username.into())?;
-                }
+                self.state.users.write().unwrap().insert(user_id, self.channel.0.clone());
 
-                
+                // get existing users
+                let state_2 = self.state.clone();
+                let (users, groups) = spawn_blocking(move || -> Result<_, ServerError> {
+                    let online_users = state_2.users.read().unwrap();
+                    let users = state_2.store.list_users()?;
+                    // list all  groups they belong to
+                    let groups = state_2.store.get_groups_for_user(user_id)?.into_iter()
+                        .map(|(id, (name, members))| {
+                            ServerGroup {
+                                id,
+                                name,
+                                // resolve the member usernames
+                                members: members
+                                    .into_iter()
+                                    .filter_map(|id| users.get(&id).map(Into::into))
+                                    .collect()
+                            }
+                        })
+                        .collect();
+                    // turn these into ServerUsers
+                    let users = users.into_iter()
+                        .map(|(id, username)|
+                             ServerUser {
+                                 id,
+                                 name: username,
+                                 online: online_users.contains_key(&id)
+                             }
+                        )
+                        .collect();
+                    Ok((users, groups))
+                }).await??;
+
+                let welcome = ServerMessage::Welcome { user_id, users, groups };
+                self.send_message(&welcome).await;
             },
             other => {
                 warn!("unimplemented: {other:?}");
