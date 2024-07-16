@@ -31,7 +31,7 @@ enum ClientMessage<'a> {
     GetMessages(MessageRecipient),
     SendMessage { message: &'a str, recipient: MessageRecipient },
     EditMessage { id: u16, new_message: &'a str },
-    EditTags { id: u16, new_tags: Vec<&'a str> },
+    EditTags { id: u16, new_tags: Vec<String> },
     DeleteMessage(u16),
 
     // Groups
@@ -288,6 +288,34 @@ impl WsHandler {
                     warn!("Uninitialized user");
                 }
             },
+            ClientMessage::EditMessage { id, new_message } => {
+                // they can't do this if they haven't initialized
+                if let Some(user_id) = self.user_id {
+                    let state = self.state.clone();
+                    let new_message = new_message.into();
+                    if let Some(message) = spawn_blocking(move || state.store.edit_message(id, new_message, user_id)).await?? {
+                        // notify all recipients that it was edited
+                        let server_message = ServerMessage::MessageEdited(id, message.message);
+                        self.send_to_recipient(server_message, message.recipient).await?;
+                    }
+                } else {
+                    warn!("Uninitialized user");
+                }
+            },
+            ClientMessage::EditTags { id, new_tags } => {
+                // they can't do this if they haven't initialized
+                if let Some(user_id) = self.user_id {
+                    let state = self.state.clone();
+                    let new_tags = new_tags.into();
+                    if let Some(message) = spawn_blocking(move || state.store.edit_message_tags(id, new_tags, user_id)).await?? {
+                        // notify all recipients that it was edited
+                        let server_message = ServerMessage::MessageTagsEdited(id, message.tags);
+                        self.send_to_recipient(server_message, message.recipient).await?;
+                    }
+                } else {
+                    warn!("Uninitialized user");
+                }
+            }
             other => {
                 warn!("unimplemented: {other:?}");
             }
