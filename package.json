@@ -1,26 +1,21 @@
 {
   "name": "send-to-computer",
   "version": "1.0.0",
-  "description": "Send messages across the network to a computer",
+  "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "build-css": "sass -s compressed --no-source-map bootstrap-styles.scss static/bootstrap.min.css",
-    "build-js": "esbuild src/bootstrap-modules.js --format=esm --bundle --minify --outfile=static/bootstrap.esm.min.js",
-    "build-server": "esbuild src/production.js --bundle --minify --platform=node --outfile=server.cjs",
-    "build": "npm run build-server",
-    "dev": "NODE_ENV=development node development.js"
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "author": "Siddhant Kameswar",
-  "license": "ISC",
-  "main": "app.js",
-  "type": "module",
+  "private": true,
+  "license": "MIT",
   "devDependencies": {
-    "bootstrap": "^5.3.0",
-    "esbuild": "^0.18.4",
-    "koa": "^2.14.2",
-    "koa-static": "^5.0.0",
-    "@seald-io/nedb": "^4.0.2",
-    "ws": "^8.13.0",
-    "sass": "^1.77.6"
-  }
+    "@types/node": "^20.14.11",
+    "autoprefixer": "^10.4.19",
+    "esbuild": "^0.23.0",
+    "lightningcss": "^1.25.1",
+    "lit": "^3.1.4",
+    "msgpack-lite": "^0.1.26",
+    "postcss": "^8.4.39",
+    "tailwindcss": "^3.4.6"
+  },
+  "type": "module"
 }

@@ -1,10 +1,7 @@
 data/
 node_modules/
-stc.service
-/messages.db
-static/bootstrap.min.css
-static/bootstrap.esm.min.js
-server.cjs
+static/main.js
+*.map
 
 # Added by cargo
 
