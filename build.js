@@ -8,8 +8,6 @@ import { transform, Features } from "lightningcss";
 
 const dev = process.argv[2] === "dev";
 
-await rm("build", { recursive: true, force: true });
-
 /** @type {import("esbuild").Plugin} */
 const cssPlugin = {
   name: "postcss",
@@ -62,4 +60,7 @@ const ctx = await context({
 
 if (dev) {
   await ctx.watch();
+} else {
+  await ctx.rebuild();
+  await ctx.dispose();
 }

@@ -2,6 +2,7 @@
   "compilerOptions": {
     "experimentalDecorators": true,
     "useDefineForClassFields": false,
-    "lib": ["ESNext", "DOM"]
+    "lib": ["ESNext", "DOM"],
+    "include": ["frontend/**/*.ts", "./global.d.ts"]
   }
 }
