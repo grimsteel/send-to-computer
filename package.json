@@ -8,6 +8,7 @@
   "private": true,
   "license": "MIT",
   "devDependencies": {
+    "@tailwindcss/forms": "^0.5.7",
     "@types/node": "^20.14.11",
     "autoprefixer": "^10.4.19",
     "esbuild": "^0.23.0",
