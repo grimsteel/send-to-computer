@@ -2,6 +2,7 @@ import { html } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { classMap } from "lit/directives/class-map.js";
 import "./components/input";
+import { showToast } from "./components/toast";
 
 import { stylesheet, StyledElement } from "./css";
 
@@ -18,6 +19,10 @@ export class StcApp extends StyledElement {
   loginSubmit(e: SubmitEvent) {
     e.preventDefault();
 
+    showToast(`hello, ${this.username}`);
+    showToast(`hello, ${this.username}`, "warning");
+    showToast(`hello, ${this.username}`, "error");
+
     this.loggedIn = true;
   }
   
@@ -26,9 +31,11 @@ export class StcApp extends StyledElement {
                      html`` :
                      html`
                        <h2 class="text-lg mb-2">Please log in:</h2>
-                       <form class="flex items-end gap-3" @submit="{this.loginSubmit}">
+                       <form class="flex items-end gap-3" @submit=${this.loginSubmit}>
                          <form-input
-                              label="Username" value=${this.username ?? ""} required class="grow">
+                           label="Username" value=${this.username ?? ""} required class="grow"
+                           @value-change=${(e: CustomEvent<{ value: string }>) => this.username = e.detail.value}
+                         >
                          </form-input>
                          <button type="submit" class="text-white bg-orange-600 hover:bg-orange-700 focus:ring-4 focus:ring-orange-800 font-medium rounded-lg text-sm px-5 py-2.5 focus:outline-none">
                            Log in
