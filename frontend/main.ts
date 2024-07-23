@@ -5,6 +5,7 @@ import "./components/input";
 import { showToast } from "./components/toast";
 
 import { stylesheet, StyledElement } from "./css";
+import Socket from "./socket";
 
 document.adoptedStyleSheets.push(stylesheet.styleSheet);
 
@@ -15,6 +16,12 @@ export class StcApp extends StyledElement {
 
   @state()
   private username: string | null = null;
+
+  private socket: Socket;
+
+  constructor() {
+    super();
+  }
 
   loginSubmit(e: SubmitEvent) {
     e.preventDefault();

@@ -24,43 +24,45 @@ impl WsState {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[serde(tag = "type")]
 enum ClientMessage<'a> {
-    RequestUsername(&'a str),
+    RequestUsername { username: &'a str },
 
     // Messages
-    GetMessages(MessageRecipient),
+    GetMessages { recipient: MessageRecipient },
     SendMessage { message: &'a str, recipient: MessageRecipient },
     EditMessage { id: u16, new_message: &'a str },
     EditTags { id: u16, new_tags: Vec<String> },
-    DeleteMessage(u16),
+    DeleteMessage { id: u16 },
 
     // Groups
     CreateGroup { name: &'a str, members: Vec<u16> },
     EditGroup { id: u16, new_name: &'a str, new_members: Vec<u16> },
-    DeleteGroup(u16)
+    DeleteGroup { id: u16 }
 }
 
 #[derive(Serialize, Debug, Clone)]
+#[serde(tag = "type" )]
 enum ServerMessage {
-    Error(String),
+    Error { err: String },
 
     Welcome { user_id: u16, users: Vec<ServerUser>, groups: Vec<ServerGroup> },
 
     // a completely new user was added
-    UserAdded(ServerUser),
+    UserAdded { user: ServerUser },
     // an existing user joined
-    UserOnline(u16),
-    UserOffline(u16),
+    UserOnline { id: u16 },
+    UserOffline { id: u16 },
         
     MessagesForRecipient { recipient: MessageRecipient, messages: Vec<(u16, Message)> },
-    MessageSent(u16, Message),
-    MessageEdited(u16, String),
-    MessageTagsEdited(u16, Vec<String>),
-    MessageDeleted(u16),
+    MessageSent { id: u16, message: Message },
+    MessageEdited { id: u16, message: String },
+    MessageTagsEdited { id: u16, tags: Vec<String> },
+    MessageDeleted { id: u16 },
 
-    GroupAdded(ServerGroup),
-    GroupEdited(ServerGroup),
-    GroupDeleted(u16)
+    GroupAdded { group: ServerGroup },
+    GroupEdited { group: ServerGroup },
+    GroupDeleted { id: u16 }
 }
 
 /// errors that get sent to the client
@@ -169,7 +171,7 @@ impl WsHandler {
 
     async fn handle_client_message<'a>(&mut self, message: ClientMessage<'a>) -> Result<(), ServerError> {
         match message {
-            ClientMessage::RequestUsername(requested_username) => {
+            ClientMessage::RequestUsername { username: requested_username} => {
                 // they can't do this if they're already initialized
                 if self.user_id.is_some() {
                     warn!("User tried to re-initialize");
@@ -200,14 +202,14 @@ impl WsHandler {
                             }
                         }
 
-                        Ok((id, ServerMessage::UserOnline(id)))
+                        Ok((id, ServerMessage::UserOnline { id }))
                     } else {
                         // create user
                         let id = state.store.create_user(username.clone())?;
 
                         let user = ServerUser { id, name: username, online: true };
 
-                        Ok((id, ServerMessage::UserAdded(user)))
+                        Ok((id, ServerMessage::UserAdded { user }))
                     }
                 }).await??;
 
@@ -251,7 +253,7 @@ impl WsHandler {
                 let welcome = ServerMessage::Welcome { user_id, users, groups };
                 self.send_message(&welcome).await;
             },
-            ClientMessage::GetMessages(recipient) => {
+            ClientMessage::GetMessages { recipient } => {
                 // they can't do this if they haven't initialized
                 if let Some(id) = self.user_id {
                     let state = self.state.clone();
@@ -269,19 +271,19 @@ impl WsHandler {
                     let state = self.state.clone();
                     let message = message.into();
                     let (id, message) = spawn_blocking(move || state.store.send_message(message, id, recipient)).await??; 
-                    let server_message = ServerMessage::MessageSent(id, message);
+                    let server_message = ServerMessage::MessageSent { id, message };
                     self.send_to_recipient(server_message, recipient).await?;
                 } else {
                     warn!("Uninitialized user");
                 }
             },
-            ClientMessage::DeleteMessage(id) => {
+            ClientMessage::DeleteMessage { id } => {
                 // they can't do this if they haven't initialized
                 if let Some(user_id) = self.user_id {
                     let state = self.state.clone();
                     if let Some(message) = spawn_blocking(move || state.store.delete_message(id, user_id)).await?? {
                         // notify all recipients that it was deleted
-                        let server_message = ServerMessage::MessageDeleted(id);
+                        let server_message = ServerMessage::MessageDeleted { id };
                         self.send_to_recipient(server_message, message.recipient).await?;
                     }
                 } else {
@@ -295,7 +297,7 @@ impl WsHandler {
                     let new_message = new_message.into();
                     if let Some(message) = spawn_blocking(move || state.store.edit_message(id, new_message, user_id)).await?? {
                         // notify all recipients that it was edited
-                        let server_message = ServerMessage::MessageEdited(id, message.message);
+                        let server_message = ServerMessage::MessageEdited { id, message: message.message };
                         self.send_to_recipient(server_message, message.recipient).await?;
                     }
                 } else {
@@ -309,7 +311,7 @@ impl WsHandler {
                     let new_tags = new_tags.into();
                     if let Some(message) = spawn_blocking(move || state.store.edit_message_tags(id, new_tags, user_id)).await?? {
                         // notify all recipients that it was edited
-                        let server_message = ServerMessage::MessageTagsEdited(id, message.tags);
+                        let server_message = ServerMessage::MessageTagsEdited { id, tags: message.tags };
                         self.send_to_recipient(server_message, message.recipient).await?;
                     }
                 } else {
@@ -343,7 +345,7 @@ impl WsHandler {
                                             if let Err(err) = self.handle_client_message(message).await {
                                                 warn!("Error while processing message: {err}");
                                                 // also send this error to the client
-                                                let message = ServerMessage::Error(format!("{err}"));
+                                                let message = ServerMessage::Error { err: format!("{err}") };
                                                 self.send_message(&message).await;
                                             }
                                         },
@@ -381,7 +383,7 @@ impl Drop for WsHandler {
                 users.remove(&id);
             }
 
-            let message = ServerMessage::UserOffline(id);
+            let message = ServerMessage::UserOffline { id };
             self.send_broadcast(message);
         }
     }
