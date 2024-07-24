@@ -5,7 +5,7 @@ import "./components/input";
 import { showToast } from "./components/toast";
 
 import { stylesheet, StyledElement } from "./css";
-import Socket from "./socket";
+import Socket, { ServerMessage } from "./socket";
 
 document.adoptedStyleSheets.push(stylesheet.styleSheet);
 
@@ -13,31 +13,61 @@ document.adoptedStyleSheets.push(stylesheet.styleSheet);
 export class StcApp extends StyledElement {
   @state()
   private loggedIn = false;
+  @state()
+  private connected = false;
 
   @state()
   private username: string | null = null;
 
   private socket: Socket;
+  private userId: number | null = null;
 
   constructor() {
     super();
+
+    this.socket = new Socket();
+    // add socket listeners
+    this.socket.on("close", (reason, code) => {
+      console.error("Socket closed", reason, code);
+      showToast(`Disconnected: ${reason}`, "warning");
+
+      // if we have a username, queue the message
+      if (this.username) {
+        this.socket.send({ type: "RequestUsername", username: this.username });
+      }
+
+      this.connected = false;
+    });
+    this.socket.on("message", msg => this.onMessage(msg));
+    this.socket.on("open", () => {
+      this.connected = true;
+    });
   }
 
   loginSubmit(e: SubmitEvent) {
     e.preventDefault();
 
-    showToast(`hello, ${this.username}`);
-    showToast(`hello, ${this.username}`, "warning");
-    showToast(`hello, ${this.username}`, "error");
+    this.socket.send({ type: "RequestUsername", username: this.username });
+  }
 
-    this.loggedIn = true;
+  onMessage(msg: ServerMessage) {
+    console.log("message", msg);
+    switch (msg.type) {
+      case "Error":
+        showToast(msg.err, "error");
+        break;
+      case "Welcome":
+        this.loggedIn = true;
+        this.userId = msg.user_id;
+        break;
+    }
   }
   
   render() {
     const contents = this.loggedIn ?
                      html`` :
                      html`
-                       <h2 class="text-lg mb-2">Please log in:</h2>
+                       <fh2 class="text-lg mb-2">Please log in:</h2>
                        <form class="flex items-end gap-3" @submit=${this.loginSubmit}>
                          <form-input
                            label="Username" value=${this.username ?? ""} required class="grow"
