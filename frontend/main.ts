@@ -5,7 +5,7 @@ import "./components/input";
 import { showToast } from "./components/toast";
 
 import { stylesheet, StyledElement } from "./css";
-import Socket, { ServerMessage } from "./socket";
+import Socket, { type ServerGroup, type ServerMessage, type ServerUser } from "./socket";
 
 document.adoptedStyleSheets.push(stylesheet.styleSheet);
 
@@ -15,9 +15,13 @@ export class StcApp extends StyledElement {
   private loggedIn = false;
   @state()
   private connected = false;
-
   @state()
   private username: string | null = null;
+
+  @state()
+  private users: ServerUser[] = [];
+  @state()
+  private groups: ServerGroup[] = [];
 
   private socket: Socket;
   private userId: number | null = null;
@@ -59,6 +63,19 @@ export class StcApp extends StyledElement {
       case "Welcome":
         this.loggedIn = true;
         this.userId = msg.user_id;
+        this.users = msg.users;
+        this.groups = msg.groups;
+        break;
+      case "UserAdded":
+        this.users = [...this.users, msg.user];
+        break;
+      case "UserOnline":
+        const idx = this.users.findIndex(el => el.id === msg.id);
+        if (idx >= 0) {
+          const item = this.users[idx];
+          item.online = true;
+          this.users = this.users.with(idx, item);
+        }
         break;
     }
   }

@@ -42,13 +42,13 @@ export type ClientMessage = {
   id: number
 };
 
-interface ServerUser {
+export interface ServerUser {
   id: number,
   name: string,
   online: boolean
 }
 
-interface ServerGroup {
+export interface ServerGroup {
   id: number,
   name: string,
   members: string[]
