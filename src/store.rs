@@ -93,6 +93,17 @@ impl std::error::Error for StoreError {}
 
 pub type Result<T> = std::result::Result<T, StoreError>;
 
+macro_rules! ignore_nonexistent_table {
+    ($table:expr, $default:expr) => {
+        match $table {
+            Ok(table) => Ok(table),
+            // if the table doesn't exist just return None
+            Err(redb::TableError::TableDoesNotExist(_)) => return $default,
+            Err(e) => Err(e),
+        }
+    }
+}
+
 pub struct Store {
     db: Database,
 }
@@ -110,22 +121,14 @@ impl Store {
 
     pub fn get_username_for_id(&self, id: u16) -> Result<Option<String>> {
         let tx = self.db.begin_read()?;
-        match tx.open_table(USERS_TABLE) {
-            Ok(users) => Ok(users.get(id)?.map(|v| v.value())),
-            // if the table doesn't exist just return None
-            Err(redb::TableError::TableDoesNotExist(_)) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+        let users = ignore_nonexistent_table!(tx.open_table(USERS_TABLE), Ok(None))?;
+        Ok(users.get(id)?.map(|v| v.value()))
     }
 
     pub fn get_id_for_username(&self, username: &str) -> Result<Option<u16>> {
         let tx = self.db.begin_read()?;
-        match tx.open_table(USERS_TABLE_REVERSE) {
-            Ok(users) => Ok(users.get(username)?.map(|v| v.value())),
-            // if the table doesn't exist just return None
-            Err(redb::TableError::TableDoesNotExist(_)) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+        let users = ignore_nonexistent_table!(tx.open_table(USERS_TABLE_REVERSE), Ok(None))?;
+        Ok(users.get(username)?.map(|v| v.value()))
     }
 
     pub fn create_user(&self, username: String) -> Result<u16> {
@@ -151,19 +154,14 @@ impl Store {
 
     pub fn list_users(&self) -> Result<HashMap<u16, String>> {
         let tx = self.db.begin_read()?;
-        match tx.open_table(USERS_TABLE) {
-            Ok(users) => Ok(users
-                .iter()?
-                .filter_map(|v| {
-                    let v = v.ok()?;
-                    Some((v.0.value(), v.1.value().into()))
-                })
-                .collect()),
-
-            // if the table doesn't exist just return an empty vec
-            Err(redb::TableError::TableDoesNotExist(_)) => Ok(HashMap::new()),
-            Err(e) => Err(e.into()),
-        }
+        let users = ignore_nonexistent_table!(tx.open_table(USERS_TABLE), Ok(HashMap::new()))?;
+        Ok(users
+           .iter()?
+           .filter_map(|v| {
+               let v = v.ok()?;
+               Some((v.0.value(), v.1.value().into()))
+           })
+           .collect())
     }
 
     pub fn create_update_group(
@@ -240,24 +238,21 @@ impl Store {
 
     pub fn get_group_members(&self, group_id: u16) -> Result<Option<HashSet<u16>>> {
         let tx = self.db.begin_read()?;
-        let groups = tx.open_table(GROUPS_TABLE)?;
-        if let Some(group) = groups.get(group_id)? {
-            Ok(Some(group.value().1.clone()))
-        } else {
-            Ok(None)
-        }
+        let groups = ignore_nonexistent_table!(tx.open_table(GROUPS_TABLE), Ok(None))?;
+        Ok(groups.get(group_id)?
+            .map(|g| g.value().1.clone()))
     }
 
     pub fn get_groups_for_user(&self, user_id: u16) -> Result<HashMap<u16, (String, HashSet<u16>)>> {
         let tx = self.db.begin_read()?;
 
         // make sure the user exists
-        let users = tx.open_table(USERS_TABLE)?;
+        let users = ignore_nonexistent_table!(tx.open_table(USERS_TABLE), Err(StoreError::InvalidUserIds))?;
         if users.get(user_id).is_err() {
             return Err(StoreError::InvalidUserIds);
         }
 
-        let groups = tx.open_table(GROUPS_TABLE)?;
+        let groups = ignore_nonexistent_table!(tx.open_table(GROUPS_TABLE), Ok(HashMap::new()))?;
 
         Ok(groups
             .iter()?

@@ -3,6 +3,7 @@ use std::{collections::HashMap, fmt::Display, path::Path, sync::{Arc, RwLock}};
 use axum::extract::ws::{self, WebSocket};
 use futures_util::StreamExt;
 use log::{debug, error, warn};
+use rmp_serde::Serializer;
 use serde::{Deserialize, Serialize};
 use tokio::{select, sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender, error::SendError}, task::{spawn_blocking, JoinError}};
 
@@ -122,8 +123,11 @@ impl WsHandler {
 
     /// send a ServerMessage to our client
     async fn send_message(&mut self, message: &ServerMessage) {
-        match rmp_serde::to_vec(message) {
-            Ok(data) => {
+        let mut data = Vec::new();
+        let mut serializer = Serializer::new(&mut data)
+            .with_struct_map();
+        match message.serialize(&mut serializer) {
+            Ok(_) => {
                 if let Err(err) = self.socket.send(ws::Message::Binary(data)).await {
                     warn!("Could not sent message: {err}");
                 }
