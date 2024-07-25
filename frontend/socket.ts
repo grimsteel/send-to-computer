@@ -81,7 +81,7 @@ export type ServerMessage = {
   type: "UserOffline",
   id: number
 } | {
-  type: "MessageForRecipient",
+  type: "MessagesForRecipient",
   recipient: MessageRecipient,
   messages: [number, Message][]
 } | {

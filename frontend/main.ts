@@ -122,8 +122,9 @@ export class StcApp extends StyledElement {
         }
         break;
       }
-      case "MessageForRecipient":
+      case "MessagesForRecipient":
         this.currentRecipient = msg.recipient;
+        break;
     }
   }
   

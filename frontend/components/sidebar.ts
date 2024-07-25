@@ -2,7 +2,7 @@ import { StyledElement } from "../css";
 
 import { customElement, property, state } from "lit/decorators.js";
 import { classMap } from "lit/directives/class-map.js";
-import { ServerGroup, ServerUser } from "../socket";
+import { MessageRecipient, ServerGroup, ServerUser } from "../socket";
 import { html, nothing } from "lit";
 
 const onlineIndicator = html`<span class="flex w-2 h-2 ms-auto bg-emerald-500 rounded-full" title="Online"></span>`;
@@ -13,6 +13,8 @@ export default class Sidebar extends StyledElement {
   users: ServerUser[];
   @property()
   groups: ServerGroup[];
+  @property()
+  currentRecipient: MessageRecipient | null;
   
   @state()
   private sidebarExpanded = false;
@@ -27,25 +29,53 @@ export default class Sidebar extends StyledElement {
   }
   
   render() {
-    const users = this.users.map(user => html`
-      <button
-             class="hover:bg-gray-600 cursor-pointer px-3 py-1 flex text-left w-full border-b border-gray-600 last:border-b-0 items-center"
-             type="button" @click=${() => this.userClicked(user.id)}
-        >
-        ${user.name}
+    const isUserRecipient = this.currentRecipient && "User" in this.currentRecipient;
+    const users = this.users.map(user => {
+      if (isUserRecipient && user.id === (this.currentRecipient as { User: number }).User) {
+        return html`
+          <p
+                 class="px-3 py-1 flex text-left w-full outline outline-1 outline-orange-600 bg-orange-900 last:border-b-0 items-center first:rounded-t last:rounded-b"
+            >
+            ${user.name}
         
-        ${user.online ? onlineIndicator : nothing}
-      </button>
-    `);
-    const groups = this.groups.map(group => html`
-      <button
-             class="hover:bg-gray-600 cursor-pointer px-3 py-1 flex text-left w-full border-b border-gray-600 last:border-b-0"
-             type="button" @click=${() => this.groupClicked(group.id)}
-        >
-        ${group.name}
-      </button>
-    `);
-
+            ${user.online ? onlineIndicator : nothing}
+          </p>
+        `;
+      } else {
+        return html`
+          <button
+                 class="hover:bg-gray-600 cursor-pointer px-3 py-1 flex text-left w-full border-b border-gray-600 last:border-b-0 items-center"
+                 type="button" @click=${() => this.userClicked(user.id)}
+            >
+            ${user.name}
+        
+            ${user.online ? onlineIndicator : nothing}
+          </button>
+        `;
+      }
+    });
+    const isGroupRecipient = this.currentRecipient && "Group" in this.currentRecipient;
+    const groups = this.groups.map(group => {
+      if (isGroupRecipient && group.id === (this.currentRecipient as { Group: number }).Group) {
+            return html`
+              <p
+                class="px-3 py-1 flex text-left w-full outline outline-1 outline-orange-600 bg-orange-900 last:border-b-0 items-center first:rounded-t last:rounded-b"
+            >
+                ${group.name}
+              </p>
+            `;
+      } else {
+        return html`
+          <button
+                 class="hover:bg-gray-600 cursor-pointer px-3 py-1 flex text-left w-full border-b border-gray-600 last:border-b-0 items-center"
+                 type="button" @click=${() => this.groupClicked(group.id)}
+            >
+            ${group.name}
+          </button>
+        `;
+      }
+    });
+    
     return html`
       <div class="transition-transform relative top-0 w-full md:translate-x-0 md:w-auto md:static md:block p-3 m-3 mt-0 bg-gray-800 border border-gray-600 rounded ${classMap({ "translate-x-[calc(-100%_-_2rem)]": !this.sidebarExpanded })} min-w-64">
         <h2 class="text-lg font-semibold mb-2">Users:</h2>
