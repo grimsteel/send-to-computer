@@ -71,6 +71,7 @@ enum ServerMessage {
 enum ServerError {
     UsernameInUse,
     InvalidUsername, // invalid characters
+    SelfMessage,
     StoreError(StoreError),
     JoinError(JoinError),
     SendError(SendError<ServerMessage>)
@@ -85,6 +86,7 @@ impl Display for ServerError {
         match self {
             Self::UsernameInUse => write!(f, "Someone has already logged in with that username"),
             Self::InvalidUsername => write!(f, "Username may only contain alphanumeric characters"),
+            Self::SelfMessage => write!(f, "You cannot send messages to yourself"),
             Self::JoinError(err) => write!(f, "Error while joining threads: {err}"),
             Self::StoreError(err) => write!(f, "Store error: {err}"),
             Self::SendError(err) => write!(f, "Error while sending message: {err}")
@@ -272,6 +274,10 @@ impl WsHandler {
             ClientMessage::SendMessage { message, recipient } => {
                 // they can't do this if they haven't initialized
                 if let Some(id) = self.user_id {
+                    if recipient == MessageRecipient::User(id) {
+                        return Err(ServerError::SelfMessage);
+                    }
+                    
                     let state = self.state.clone();
                     let message = message.into();
                     let (id, message) = spawn_blocking(move || state.store.send_message(message, id, recipient)).await??; 
