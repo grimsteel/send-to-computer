@@ -427,8 +427,8 @@ impl Store {
     /// get all messages received by this group
     fn get_group_messages(&self, user_id: u16, group_id: u16) -> Result<Vec<(u16, Message)>> {
         let tx = self.db.begin_read()?;
-        let messages = tx.open_table(MESSAGES_TABLE)?;
-        let msg_endpoints = tx.open_table(MSG_ENDPOINT_TABLE)?;
+        let messages = ignore_nonexistent_table!(tx.open_table(MESSAGES_TABLE), Ok(vec![]))?;
+        let msg_endpoints = ignore_nonexistent_table!(tx.open_table(MSG_ENDPOINT_TABLE), Ok(vec![]))?;
         let groups = tx.open_table(GROUPS_TABLE)?;
 
         if let Some(group) = groups.get(group_id)? {
@@ -463,8 +463,8 @@ impl Store {
     /// get all messages sent from user a to user b and vice versa
     fn get_user_messages(&self, user_a: u16, user_b: u16) -> Result<Vec<(u16, Message)>> {
         let tx = self.db.begin_read()?;
-        let messages = tx.open_table(MESSAGES_TABLE)?;
-        let msg_endpoints = tx.open_table(MSG_ENDPOINT_TABLE)?;
+        let messages = ignore_nonexistent_table!(tx.open_table(MESSAGES_TABLE), Ok(vec![]))?;
+        let msg_endpoints = ignore_nonexistent_table!(tx.open_table(MSG_ENDPOINT_TABLE), Ok(vec![]))?;
 
         let user_a_recipient = MessageRecipient::User(user_a);
         let user_b_recipient = MessageRecipient::User(user_b);
