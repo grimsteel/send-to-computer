@@ -13,10 +13,6 @@ import Socket, { type Message, type MessageRecipient, type ServerGroup, type Ser
 
 document.adoptedStyleSheets.push(stylesheet.styleSheet);
 
-function recipientsEqual(a: MessageRecipient, b: MessageRecipient) {
-  return ("User" in a && "User" in b && a.User === b.User) || ("Group" in a && "Group" in b && a.Group === b.Group);
-}
-
 @customElement("stc-app")
 export class StcApp extends StyledElement {
   @state()
@@ -73,9 +69,8 @@ export class StcApp extends StyledElement {
     this.socket.send({ type: "RequestUsername", username: this.username });
   }
 
-  loginSubmit(e: SubmitEvent) {
-    e.preventDefault();
-
+  loginSubmit(e: CustomEvent<{ value: string }>) {
+    this.username = e.detail.value;
     localStorage.setItem("username", this.username);
     this.login();
   }
@@ -84,10 +79,16 @@ export class StcApp extends StyledElement {
     this.socket.send({ type: "GetMessages", recipient });
   }
 
-  sendMessage(message: string) {
+  sendMessage(e: CustomEvent<{ message: string }>) {
     if (!this.currentRecipient) return;
 
-    this.socket.send({ type: "SendMessage", message, recipient: this.currentRecipient });
+    this.socket.send({ type: "SendMessage", message: e.detail.message, recipient: this.currentRecipient });
+  }
+
+  isForRecipient(msg: Message) {
+    const r = msg.recipient;
+    const cr = this.currentRecipient
+    return ("User" in r && "User" in cr && r.User === cr.User) || ("Group" in r && "Group" in cr && r.Group === cr.Group) || ("User" in cr && cr.User === msg.sender);
   }
 
   onMessage(msg: ServerMessage) {
@@ -143,7 +144,7 @@ export class StcApp extends StyledElement {
       case "MessageSent":
         // if it's for the current recipient, add it to the list
         // otherwise, TODO: show unread message
-        if (this.currentRecipient && recipientsEqual(this.currentRecipient, msg.message.recipient)) {
+        if (this.currentRecipient && this.isForRecipient(msg.message)) {
           this.messages = [...this.messages, msg.message];
         }
         break;
@@ -154,42 +155,31 @@ export class StcApp extends StyledElement {
     const messageContents = this.currentRecipient ?
                             html`
                               <message-list
-                                      class="contents" .messages=${this.messages}
-                                @message-sent=${(e: CustomEvent<{ message: string }>) => this.sendMessage(e.detail.message)}
-                                >
-                              </message-list>
+                                class="contents" .messages=${this.messages} .users=${[...this.users, { name: this.username, id: this.userId }]}
+                                @send-message=${this.sendMessage}
+                              ></message-list>
                             ` : html`
                               <welcome-message class="contents" .username=${this.username}></welcome-message>
                             `;
-    const contents = this.loggedIn ?
-                     html`
+      const contents = this.loggedIn ?
+                       html`
                        <side-bar
-                              class="contents"
+                         class="contents"
                          .groups=${this.groups} .users=${this.users} .currentRecipient=${this.currentRecipient}
                          @user-clicked=${(e: CustomEvent<{ id: number }>) => this.showRecepientMessages({ User: e.detail.id })}
                          @group-clicked=${(e: CustomEvent<{ id: number }>) => this.showRecepientMessages({ Group: e.detail.id })}
-                           >
-                       </side-bar>
+                       ></side-bar>
                        ${messageContents}
                        ` :
-                     html`
-                       <h2 class="text-xl font-bold">Please log in:</h2>
-                       <form class="flex items-end gap-3" @submit=${this.loginSubmit}>
-                           <form-input
-                                label="Username" value=${this.username ?? ""} required class="grow"
-                             @value-change=${(e: CustomEvent<{ value: string }>) => this.username = e.detail.value}
-                         >
-                           </form-input>
-                         <button type="submit" class="text-white bg-orange-600 hover:bg-orange-700 focus:ring-4 focus:ring-orange-800 font-medium rounded-lg text-sm px-5 py-2.5 focus:outline-none">
-                           Log in
-                         </button>
-                       </form>
+                       html`
+                         <h2 class="text-xl font-bold">Please log in:</h2>
+                         <form-input class="contents" label="Username" buttonLabel="Log in" @submit=${this.loginSubmit}></form-input>
                        `;
-    
-    return html`
+
+      return html`
       <hea-der .loggedIn=${this.loggedIn} .connected=${this.connected} .username=${this.username} ></hea-der>
       
-      <div class="${classMap({ "flex": this.loggedIn, "p-3": !this.loggedIn })} grow relative">
+      <div class="${classMap({ "flex": this.loggedIn, "p-3": !this.loggedIn })} grow relative min-h-0">
         ${contents}
       </div>
     `;
