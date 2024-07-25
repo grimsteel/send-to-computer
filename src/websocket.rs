@@ -55,8 +55,8 @@ enum ServerMessage {
     UserOnline { id: u16 },
     UserOffline { id: u16 },
         
-    MessagesForRecipient { recipient: MessageRecipient, messages: Vec<(u16, Message)> },
-    MessageSent { id: u16, message: Message },
+    MessagesForRecipient { recipient: MessageRecipient, messages: Vec<MessageWithId> },
+    MessageSent { message: MessageWithId },
     MessageEdited { id: u16, message: String },
     MessageTagsEdited { id: u16, tags: Vec<String> },
     MessageDeleted { id: u16 },
@@ -91,6 +91,20 @@ impl Display for ServerError {
             Self::StoreError(err) => write!(f, "Store error: {err}"),
             Self::SendError(err) => write!(f, "Error while sending message: {err}")
         }
+    }
+}
+
+#[derive(Serialize, Debug, Clone)]
+struct MessageWithId {
+    id: u16,
+    #[serde(flatten)]
+    message: Message
+}
+
+/// IDs in the DB are stored separately
+impl From<(u16, Message)> for MessageWithId {
+    fn from((id, message): (u16, Message)) -> Self {
+        Self { id, message }
     }
 }
 
@@ -265,7 +279,10 @@ impl WsHandler {
                 if let Some(id) = self.user_id {
                     let state = self.state.clone();
                     // retrieve the messages from the store
-                    let messages = spawn_blocking(move || state.store.get_messages(id, recipient)).await??;
+                    let messages = spawn_blocking(move || state.store.get_messages(id, recipient)).await??
+                        .into_iter()
+                        .map(|m| m.into())
+                        .collect();
                     let messages = ServerMessage::MessagesForRecipient { recipient, messages };
                     self.send_message(&messages).await;
                 } else {
@@ -281,8 +298,9 @@ impl WsHandler {
                     
                     let state = self.state.clone();
                     let message = message.into();
-                    let (id, message) = spawn_blocking(move || state.store.send_message(message, id, recipient)).await??; 
-                    let server_message = ServerMessage::MessageSent { id, message };
+                    let message = spawn_blocking(move || state.store.send_message(message, id, recipient)).await??
+                        .into(); 
+                    let server_message = ServerMessage::MessageSent { message };
                     self.send_to_recipient(server_message, recipient).await?;
                 } else {
                     warn!("Uninitialized user");

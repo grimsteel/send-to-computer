@@ -54,7 +54,8 @@ export interface ServerGroup {
   members: string[]
 }
 
-interface Message {
+export interface Message {
+  id: number,
   sender: number,
   recipient: MessageRecipient,
   message: string,
@@ -83,10 +84,9 @@ export type ServerMessage = {
 } | {
   type: "MessagesForRecipient",
   recipient: MessageRecipient,
-  messages: [number, Message][]
+  messages: Message[]
 } | {
   type: "MessageSent",
-  id: number,
   message: Message
 } | {
   type: "MessageTagsEdited",
