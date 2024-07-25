@@ -1,15 +1,21 @@
-import { html, nothing } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
+import { html } from "lit";
+import { customElement, state } from "lit/decorators.js";
 import { classMap } from "lit/directives/class-map.js";
 import "./components/input";
 import "./components/sidebar";
 import "./components/header";
+import "./components/message-list";
+import "./components/welcome";
 import { showToast } from "./components/toast";
 
 import { stylesheet, StyledElement } from "./css";
-import Socket, { MessageRecipient, type ServerGroup, type ServerMessage, type ServerUser } from "./socket";
+import Socket, { type Message, type MessageRecipient, type ServerGroup, type ServerMessage, type ServerUser } from "./socket";
 
 document.adoptedStyleSheets.push(stylesheet.styleSheet);
+
+function recipientsEqual(a: MessageRecipient, b: MessageRecipient) {
+  return ("User" in a && "User" in b && a.User === b.User) || ("Group" in a && "Group" in b && a.Group === b.Group);
+}
 
 @customElement("stc-app")
 export class StcApp extends StyledElement {
@@ -26,6 +32,8 @@ export class StcApp extends StyledElement {
   private groups: ServerGroup[] = [];
   @state()
   private currentRecipient: MessageRecipient | null = null;
+  @state()
+  private messages: Message[] = [];
 
   private socket: Socket;
   private userId: number | null = null;
@@ -76,6 +84,12 @@ export class StcApp extends StyledElement {
     this.socket.send({ type: "GetMessages", recipient });
   }
 
+  sendMessage(message: string) {
+    if (!this.currentRecipient) return;
+
+    this.socket.send({ type: "SendMessage", message, recipient: this.currentRecipient });
+  }
+
   onMessage(msg: ServerMessage) {
     switch (msg.type) {
       case "Error":
@@ -124,31 +138,51 @@ export class StcApp extends StyledElement {
       }
       case "MessagesForRecipient":
         this.currentRecipient = msg.recipient;
+        this.messages = msg.messages;
+        break;
+      case "MessageSent":
+        // if it's for the current recipient, add it to the list
+        // otherwise, TODO: show unread message
+        if (this.currentRecipient && recipientsEqual(this.currentRecipient, msg.message.recipient)) {
+          this.messages = [...this.messages, msg.message];
+        }
         break;
     }
   }
   
   render() {
-      const contents = this.loggedIn ?
-                       html`
-                         <side-bar class="contents"
-                           .groups=${this.groups} .users=${this.users} .currentRecipient=${this.currentRecipient}
-                           @user-clicked=${(e: CustomEvent<{ id: number }>) => this.showRecepientMessages({ User: e.detail.id })}
-                           @group-clicked=${(e: CustomEvent<{ id: number }>) => this.showRecepientMessages({ Group: e.detail.id })}
+    const messageContents = this.currentRecipient ?
+                            html`
+                              <message-list
+                                      class="contents" .messages=${this.messages}
+                                @message-sent=${(e: CustomEvent<{ message: string }>) => this.sendMessage(e.detail.message)}
+                                >
+                              </message-list>
+                            ` : html`
+                              <welcome-message class="contents" .username=${this.username}></welcome-message>
+                            `;
+    const contents = this.loggedIn ?
+                     html`
+                       <side-bar
+                              class="contents"
+                         .groups=${this.groups} .users=${this.users} .currentRecipient=${this.currentRecipient}
+                         @user-clicked=${(e: CustomEvent<{ id: number }>) => this.showRecepientMessages({ User: e.detail.id })}
+                         @group-clicked=${(e: CustomEvent<{ id: number }>) => this.showRecepientMessages({ Group: e.detail.id })}
                            >
-                         </side-bar>
+                       </side-bar>
+                       ${messageContents}
                        ` :
-                       html`
-                         <h2 class="text-xl font-bold">Please log in:</h2>
-                         <form class="flex items-end gap-3" @submit=${this.loginSubmit}>
+                     html`
+                       <h2 class="text-xl font-bold">Please log in:</h2>
+                       <form class="flex items-end gap-3" @submit=${this.loginSubmit}>
                            <form-input
                                 label="Username" value=${this.username ?? ""} required class="grow"
                              @value-change=${(e: CustomEvent<{ value: string }>) => this.username = e.detail.value}
                          >
                            </form-input>
-                           <button type="submit" class="text-white bg-orange-600 hover:bg-orange-700 focus:ring-4 focus:ring-orange-800 font-medium rounded-lg text-sm px-5 py-2.5 focus:outline-none">
-                             Log in
-                           </button>
+                         <button type="submit" class="text-white bg-orange-600 hover:bg-orange-700 focus:ring-4 focus:ring-orange-800 font-medium rounded-lg text-sm px-5 py-2.5 focus:outline-none">
+                           Log in
+                         </button>
                        </form>
                        `;
     

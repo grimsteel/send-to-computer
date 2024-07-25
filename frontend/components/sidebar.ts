@@ -21,10 +21,12 @@ export default class Sidebar extends StyledElement {
 
   userClicked(userId: number) {
     const ev = new CustomEvent("user-clicked", { detail: { id: userId } });
+    this.sidebarExpanded = false;
     this.dispatchEvent(ev);
   }
   groupClicked(groupId: number) {
     const ev = new CustomEvent("group-clicked", { detail: { id: groupId } });
+    this.sidebarExpanded = false;
     this.dispatchEvent(ev);
   }
   
@@ -34,7 +36,7 @@ export default class Sidebar extends StyledElement {
       if (isUserRecipient && user.id === (this.currentRecipient as { User: number }).User) {
         return html`
           <p
-                 class="px-3 py-1 flex text-left w-full outline outline-1 outline-orange-600 bg-orange-900 last:border-b-0 items-center first:rounded-t last:rounded-b"
+                 class="px-3 py-1 flex text-left w-full outline outline-1 outline-orange-600 bg-orange-950 last:border-b-0 items-center first:rounded-t last:rounded-b"
             >
             ${user.name}
         
@@ -59,7 +61,7 @@ export default class Sidebar extends StyledElement {
       if (isGroupRecipient && group.id === (this.currentRecipient as { Group: number }).Group) {
             return html`
               <p
-                class="px-3 py-1 flex text-left w-full outline outline-1 outline-orange-600 bg-orange-900 last:border-b-0 items-center first:rounded-t last:rounded-b"
+                class="px-3 py-1 flex text-left w-full outline outline-1 outline-orange-600 bg-orange-950 last:border-b-0 items-center first:rounded-t last:rounded-b"
             >
                 ${group.name}
               </p>
@@ -75,14 +77,16 @@ export default class Sidebar extends StyledElement {
         `;
       }
     });
-    
+
     return html`
-      <div class="transition-transform relative top-0 w-full md:translate-x-0 md:w-auto md:static md:block p-3 m-3 mt-0 bg-gray-800 border border-gray-600 rounded ${classMap({ "translate-x-[calc(-100%_-_2rem)]": !this.sidebarExpanded })} min-w-64">
-        <h2 class="text-lg font-semibold mb-2">Users:</h2>
+      <div class="transition-transform absolute top-0 w-[calc(100%_-_1.5rem)] h-[calc(100%_-_0.75rem)] md:translate-x-0 md:w-auto md:static md:block p-3 m-3 mt-0 bg-gray-800 border border-gray-600 rounded ${classMap({ "translate-x-[calc(-100%_-_2rem)]": !this.sidebarExpanded })} min-w-64">
+        <h2 class="sr-only">Sidebar</h2>
+        
+        <h3 class="text-lg font-semibold mb-2">Users:</h2>
         <div class="border border-gray-600 rounded mb-3">
-          ${users}
+          ${users.length > 0 ? users : html`<p class="px-3 py-1">No users yet...</p>`}
         </div>
-        <h2 class="text-lg font-semibold mb-2">Groups:</h2>
+        <h3 class="text-lg font-semibold mb-2">Groups:</h2>
         <div class="border border-gray-600 rounded mb-3">
           ${groups.length > 0 ? groups : html`<p class="px-3 py-1">No groups yet...</p>`}
         </div>
