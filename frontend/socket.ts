@@ -1,6 +1,6 @@
 import { encode, decode } from "@msgpack/msgpack";
 
-type MessageRecipient = {
+export type MessageRecipient = {
   User: number
 } | {
   Group: number

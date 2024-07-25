@@ -245,6 +245,7 @@ impl WsHandler {
                         .collect();
                     // turn these into ServerUsers
                     let users = users.into_iter()
+                        .filter(|(id, _)| *id != user_id)
                         .map(|(id, username)|
                              ServerUser {
                                  id,

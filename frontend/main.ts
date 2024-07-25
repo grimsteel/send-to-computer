@@ -69,11 +69,15 @@ export class StcApp extends StyledElement {
     this.login();
   }
 
+  showRecepientMessages(recipient: MessageRecipient) {
+    this.socket.send({ type: "GetMessages", recipient });
+  }
+
   onMessage(msg: ServerMessage) {
-    console.log("message", msg);
     switch (msg.type) {
       case "Error":
         showToast(msg.err, "error");
+        this.loginQueued = false;
         break;
       case "Welcome":
         this.loggedIn = true;
