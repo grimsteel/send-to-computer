@@ -5,6 +5,10 @@ import { classMap } from "lit/directives/class-map.js";
 import { MessageRecipient, ServerGroup, ServerUser } from "../socket";
 import { html, nothing } from "lit";
 
+import "./create-group-modal";
+import { createRef, Ref, ref } from "lit/directives/ref.js";
+import CreateGroupModal from "./create-group-modal";
+
 const onlineIndicator = html`<span class="flex w-2 h-2 ms-auto bg-emerald-500 rounded-full" title="Online"></span>`;
 
 @customElement("side-bar")
@@ -18,6 +22,8 @@ export default class Sidebar extends StyledElement {
   
   @state()
   private sidebarExpanded = false;
+
+  private createGroupModal: Ref<CreateGroupModal> = createRef();
 
   userClicked(userId: number) {
     const ev = new CustomEvent("user-clicked", { detail: { id: userId } });
@@ -46,7 +52,7 @@ export default class Sidebar extends StyledElement {
       } else {
         return html`
           <button
-                 class="hover:bg-gray-600 cursor-pointer px-3 py-1 flex text-left w-full border-b border-gray-600 last:border-b-0 items-center"
+                 class="hover:bg-gray-600 cursor-pointer px-3 py-1 flex text-left w-full border-b border-gray-600 last:border-b-0 items-center transition-colors"
                  type="button" @click=${() => this.userClicked(user.id)}
             >
             ${user.name}
@@ -69,7 +75,7 @@ export default class Sidebar extends StyledElement {
       } else {
         return html`
           <button
-                 class="hover:bg-gray-600 cursor-pointer px-3 py-1 flex text-left w-full border-b border-gray-600 last:border-b-0 items-center"
+                 class="hover:bg-gray-600 cursor-pointer px-3 py-1 flex text-left w-full border-b border-gray-600 last:border-b-0 items-center transition-colors"
                  type="button" @click=${() => this.groupClicked(group.id)}
             >
             ${group.name}
@@ -88,7 +94,13 @@ export default class Sidebar extends StyledElement {
         </div>
         <h3 class="text-lg font-semibold mb-2">Groups:</h2>
         <div class="border border-gray-600 rounded mb-3">
-          ${groups.length > 0 ? groups : html`<p class="px-3 py-1">No groups yet...</p>`}
+          ${groups}
+          <button
+                 class="hover:bg-orange-950 hover:outline-orange-600/75 transition-colors cursor-pointer px-3 py-1 flex text-left w-full bg-orange-950/50 last:border-b-0 items-center first:rounded-t last:rounded-b outline-orange-700/50 outline outline-1"
+                 type="button" @click=${() => this.createGroupModal.value?.show()}
+            >
+            Create group...
+          </button>
         </div>
       </div>
       
@@ -96,7 +108,9 @@ export default class Sidebar extends StyledElement {
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 transition-transform ${classMap({ "rotate-180": this.sidebarExpanded })}">
           <path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
         </svg>
-      </button> 
+      </button>
+
+      <create-group-modal ${ref(this.createGroupModal)}></create-group-modal>
     `;
     }
 }
