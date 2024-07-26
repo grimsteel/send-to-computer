@@ -17,7 +17,7 @@ export default class extends StyledElement {
   private onBlur(e: FocusEvent) {
     const value = (e.target as HTMLInputElement).value;
     const tags = [...new Set(value.split(" ").map(el => el.trim()).filter(el => el))];
-    this.dispatchEvent(new CustomEvent("tags-changed", { detail: { tags } }));
+    this.dispatchEvent(new CustomEvent("tags-changed-1", { detail: { tags }, bubbles: true, composed: true }));
   }
 
   render() {
