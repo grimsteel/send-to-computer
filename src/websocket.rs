@@ -162,17 +162,19 @@ impl WsHandler {
     }
 
     /// send a broadcast message to all clients in the map that match the recipient
-    async fn send_to_recipient(&mut self, message: ServerMessage, recipient: MessageRecipient) -> Result<(), ServerError> {
+    async fn send_to_recipient(&mut self, message: ServerMessage, recipient: MessageRecipient, sender: u16) -> Result<(), ServerError> {
         match recipient {
             MessageRecipient::User(user_id) => {
-                if self.user_id.is_some_and(|u| u != user_id) {
-                    // send it to our user too
-                    self.send_message(&message).await;
+                let users = self.state.users.read().unwrap();
+                
+                // send it to the sender
+                if let Some(sender) = users.get(&sender) {
+                    sender.send(message.clone())?;
                 }
                 
-                // if this user is in the map, send to them
-                if let Some(client) = self.state.users.read().unwrap().get(&user_id) {
-                    client.send(message)?;
+                // if the recipient is in the map, send to them
+                if let Some(recipient) = users.get(&user_id) {
+                    recipient.send(message)?;
                 }
             },
             MessageRecipient::Group(group_id) => {
@@ -303,7 +305,7 @@ impl WsHandler {
                     let message = spawn_blocking(move || state.store.send_message(message, id, recipient)).await??
                         .into(); 
                     let server_message = ServerMessage::MessageSent { message };
-                    self.send_to_recipient(server_message, recipient).await?;
+                    self.send_to_recipient(server_message, recipient, id).await?;
                 } else {
                     warn!("Uninitialized user");
                 }
@@ -315,7 +317,7 @@ impl WsHandler {
                     if let Some(message) = spawn_blocking(move || state.store.delete_message(id, user_id)).await?? {
                         // notify all recipients that it was deleted
                         let server_message = ServerMessage::MessageDeleted { id };
-                        self.send_to_recipient(server_message, message.recipient).await?;
+                        self.send_to_recipient(server_message, message.recipient, message.sender).await?;
                     }
                 } else {
                     warn!("Uninitialized user");
@@ -329,7 +331,7 @@ impl WsHandler {
                     if let Some(message) = spawn_blocking(move || state.store.edit_message(id, new_message, user_id)).await?? {
                         // notify all recipients that it was edited
                         let server_message = ServerMessage::MessageEdited { id, message: message.message };
-                        self.send_to_recipient(server_message, message.recipient).await?;
+                        self.send_to_recipient(server_message, message.recipient, message.sender).await?;
                     }
                 } else {
                     warn!("Uninitialized user");
@@ -343,7 +345,7 @@ impl WsHandler {
                     if let Some(message) = spawn_blocking(move || state.store.edit_message_tags(id, new_tags, user_id)).await?? {
                         // notify all recipients that it was edited
                         let server_message = ServerMessage::MessageTagsEdited { id, tags: message.tags };
-                        self.send_to_recipient(server_message, message.recipient).await?;
+                        self.send_to_recipient(server_message, message.recipient, message.sender).await?;
                     }
                 } else {
                     warn!("Uninitialized user");

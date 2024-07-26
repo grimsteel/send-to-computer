@@ -50,19 +50,26 @@ export default class MessageList extends StyledElement {
         const username = this.users.find(el => el.id === message.sender).name;
         const date = new Date(message.time * 1000).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
         const canEdit = message.sender === this.userId;
-          return html`
+        return html`
           <p style="overflow-wrap: break-word;" class="flex items-center">
             <strong class="font-semibold me-1">${username}:</strong>
             <span style="overflow-wrap: break-word" class="min-w-0">${message.message}</span>
-            <button class="p-0 ms-auto text-rose-500 hover:text-rose-600 cursor-pointer" type="button" @click=${() => this.deleteMessage(message.id)}>
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="w-3.5 h-3.5">
+            <button class="p-0 text-emerald-500 hover:text-emerald-600 cursor-pointer ms-auto" type="button" @click=${() => navigator.clipboard.writeText(message.message)}>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="w-4 h-4">
+                <path fill-rule="evenodd" d="M11.986 3H12a2 2 0 0 1 2 2v6a2 2 0 0 1-1.5 1.937V7A2.5 2.5 0 0 0 10 4.5H4.063A2 2 0 0 1 6 3h.014A2.25 2.25 0 0 1 8.25 1h1.5a2.25 2.25 0 0 1 2.236 2ZM10.5 4v-.75a.75.75 0 0 0-.75-.75h-1.5a.75.75 0 0 0-.75.75V4h3Z" clip-rule="evenodd" />
+                <path fill-rule="evenodd" d="M3 6a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1H3Zm1.75 2.5a.75.75 0 0 0 0 1.5h3.5a.75.75 0 0 0 0-1.5h-3.5ZM4 11.75a.75.75 0 0 1 .75-.75h3.5a.75.75 0 0 1 0 1.5h-3.5a.75.75 0 0 1-.75-.75Z" clip-rule="evenodd" />
+              </svg>
+            </button>
+            <button class="p-0 text-rose-500 hover:text-rose-600 cursor-pointer ms-2" type="button" @click=${() => this.deleteMessage(message.id)}>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="w-4 h-4">
                 <path fill-rule="evenodd" d="M5 3.25V4H2.75a.75.75 0 0 0 0 1.5h.3l.815 8.15A1.5 1.5 0 0 0 5.357 15h5.285a1.5 1.5 0 0 0 1.493-1.35l.815-8.15h.3a.75.75 0 0 0 0-1.5H11v-.75A2.25 2.25 0 0 0 8.75 1h-1.5A2.25 2.25 0 0 0 5 3.25Zm2.25-.75a.75.75 0 0 0-.75.75V4h3v-.75a.75.75 0 0 0-.75-.75h-1.5ZM6.05 6a.75.75 0 0 1 .787.713l.275 5.5a.75.75 0 0 1-1.498.075l-.275-5.5A.75.75 0 0 1 6.05 6Zm3.9 0a.75.75 0 0 1 .712.787l-.275 5.5a.75.75 0 0 1-1.498-.075l.275-5.5a.75.75 0 0 1 .786-.711Z" clip-rule="evenodd" />
               </svg>
             </button>
           </p>
-          <p class="mb-3 text-gray-300 text-sm">
-            ${date} •
-            <tag-list .tags=${message.tags} .canEdit=${canEdit}
+          
+          <p class="mb-3 text-gray-300 text-sm flex items-center">
+            <span class="me-1">${date} •</span>
+            <tag-list .tags=${message.tags} .canEdit=${canEdit} class="grow"
               @tags-changed=${(e: CustomEvent<{ tags: string[]; }>) => this.tagsChanged(message.id, e)}
             ></tag-list>
           </p>

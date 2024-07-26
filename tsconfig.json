@@ -3,6 +3,8 @@
     "experimentalDecorators": true,
     "useDefineForClassFields": false,
     "lib": ["ESNext", "DOM"],
+    "target": "ESNext",
+    "moduleResolution": "bundler",
     "include": ["frontend/**/*.ts", "./global.d.ts"]
   }
 }
