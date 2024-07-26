@@ -165,8 +165,10 @@ impl WsHandler {
     async fn send_to_recipient(&mut self, message: ServerMessage, recipient: MessageRecipient) -> Result<(), ServerError> {
         match recipient {
             MessageRecipient::User(user_id) => {
-                // send it to our user too
-                self.send_message(&message).await;
+                if self.user_id.is_some_and(|u| u != user_id) {
+                    // send it to our user too
+                    self.send_message(&message).await;
+                }
                 
                 // if this user is in the map, send to them
                 if let Some(client) = self.state.users.read().unwrap().get(&user_id) {

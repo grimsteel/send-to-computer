@@ -89,6 +89,10 @@ export type ServerMessage = {
   type: "MessageSent",
   message: Message
 } | {
+  type: "MessageEdited",
+  id: number,
+  message: string
+} | {
   type: "MessageTagsEdited",
   id: number,
   tags: string[]

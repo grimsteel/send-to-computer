@@ -63,35 +63,43 @@ export class StcApp extends StyledElement {
     }
   }
 
-  login() {
+  private login() {
     if (this.loginQueued) return;
     this.loginQueued = true;
     this.socket.send({ type: "RequestUsername", username: this.username });
   }
 
-  loginSubmit(e: CustomEvent<{ value: string }>) {
+  private loginSubmit(e: CustomEvent<{ value: string }>) {
     this.username = e.detail.value;
     localStorage.setItem("username", this.username);
     this.login();
   }
 
-  showRecepientMessages(recipient: MessageRecipient) {
+  private showRecepientMessages(recipient: MessageRecipient) {
     this.socket.send({ type: "GetMessages", recipient });
   }
 
-  sendMessage(e: CustomEvent<{ message: string }>) {
+  private sendMessage(e: CustomEvent<{ message: string }>) {
     if (!this.currentRecipient) return;
 
     this.socket.send({ type: "SendMessage", message: e.detail.message, recipient: this.currentRecipient });
   }
 
-  isForRecipient(msg: Message) {
+  private editTags(e: CustomEvent<{ messageId: number, tags: string[] }>) {
+    this.socket.send({ type: "EditTags", new_tags: e.detail.tags, id: e.detail.messageId });
+  }
+
+  private deleteMessage(e: CustomEvent<{ messageId: number }>) {
+    this.socket.send({ type: "DeleteMessage", id: e.detail.messageId });
+  }
+
+  private isForRecipient(msg: Message) {
     const r = msg.recipient;
     const cr = this.currentRecipient
     return ("User" in r && "User" in cr && r.User === cr.User) || ("Group" in r && "Group" in cr && r.Group === cr.Group) || ("User" in cr && cr.User === msg.sender);
   }
 
-  onMessage(msg: ServerMessage) {
+  private onMessage(msg: ServerMessage) {
     switch (msg.type) {
       case "Error":
         showToast(msg.err, "error");
@@ -148,6 +156,30 @@ export class StcApp extends StyledElement {
           this.messages = [...this.messages, msg.message];
         }
         break;
+      case "MessageTagsEdited":
+      case "MessageEdited":
+        if (this.currentRecipient) {
+          const messageIdx = this.messages.findIndex(el => el.id === msg.id);
+          if (messageIdx >= 0) {
+            const message = msg.type === "MessageTagsEdited" ? {
+              ...this.messages[messageIdx],
+              tags: msg.tags
+            } : {
+              ...this.messages[messageIdx],
+              message: msg.message
+            };
+            this.messages = this.messages.with(messageIdx, message);
+          }
+        }
+        break;
+      case "MessageDeleted":
+        if (this.currentRecipient) {
+          const messageIdx = this.messages.findIndex(el => el.id === msg.id);
+          if (messageIdx >= 0) {
+            this.messages = this.messages.toSpliced(messageIdx, 1);
+          }
+        }
+        break;
     }
   }
   
@@ -156,7 +188,7 @@ export class StcApp extends StyledElement {
                             html`
                               <message-list
                                 class="contents" .messages=${this.messages} .users=${[...this.users, { name: this.username, id: this.userId }]}
-                                @send-message=${this.sendMessage}
+                                @send-message=${this.sendMessage} @tags-changed=${this.editTags} .userId=${this.userId} @delete-message=${this.deleteMessage}
                               ></message-list>
                             ` : html`
                               <welcome-message class="contents" .username=${this.username}></welcome-message>

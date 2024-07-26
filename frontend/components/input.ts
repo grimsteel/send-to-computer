@@ -34,7 +34,7 @@ export default class FormInput extends StyledElement {
     return html`
       <form class="flex items-end gap-3" @submit=${this.onSubmit}>
         <div class="grow">
-          <label for="${this.inputId}" class="block mb-2 text-sm font-semibold text-gray-900 dark:text-white">
+          <label for="${this.inputId}" class="block mb-2 text-sm font-semibold text-gray-900 text-white">
             ${this.label}
           </label>
           <input
