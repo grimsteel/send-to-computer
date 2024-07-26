@@ -27,13 +27,28 @@ export default class MessageList extends StyledElement {
     this.dispatchEvent(new CustomEvent("send-message", { detail: { message: e.detail.value } }));
   }
 
+  /** scroll the message container if the user was at the bottom */
   private scrollContainer() {
-    this.messagesContainer.value?.lastElementChild?.scrollIntoView({ behavior: "instant" });
+    const messageContainer = this.messagesContainer.value;
+    if (messageContainer) {
+      const scrollBottom = messageContainer.scrollTop + messageContainer.clientHeight;
+      // this happens before the DOM update -- if they _were_ scrolled to the bottom (or near the bottom)
+      if (scrollBottom + 16 >= messageContainer.scrollHeight) {
+        // after the DOM update, scroll it
+        queueMicrotask(() => {
+          // the container may have changed
+          const messageContainer = this.messagesContainer.value;
+          if (messageContainer) {
+            messageContainer.scrollBy({ top: messageContainer.scrollHeight - messageContainer.scrollTop - messageContainer.clientHeight, behavior: "instant" });
+          }
+        });
+      }
+    }
   }
 
   updated(changedProperties: Map<string, any>) {
     if (changedProperties.has("messages")) {
-      queueMicrotask(() => this.scrollContainer());
+      this.scrollContainer()
     }
   }
 
@@ -43,6 +58,10 @@ export default class MessageList extends StyledElement {
 
   private deleteMessage(messageId: number) {
     this.dispatchEvent(new CustomEvent("delete-message", { detail: { messageId } }));
+  }
+
+  private messageChanged(messageId: number, e: CustomEvent<{ message: string }>) {
+    this.dispatchEvent(new CustomEvent("message-changed", { detail: { messageId, message: e.detail.message } }));
   }
 
   render() {
@@ -56,6 +75,7 @@ export default class MessageList extends StyledElement {
             .date=${date} .canEdit=${canEdit} .message=${message.message} .sender=${username}
             .tags=${message.tags} @delete=${() => this.deleteMessage(message.id)}
             @tags-changed-1=${(e: CustomEvent<{ tags: string[]; }>) => this.tagsChanged(message.id, e)}
+            @message-changed=${(e: CustomEvent<{ message: string; }>) => this.messageChanged(message.id, e)}
           ></message-row>
         `;
       }) :

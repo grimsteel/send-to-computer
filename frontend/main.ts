@@ -89,6 +89,10 @@ export class StcApp extends StyledElement {
     this.socket.send({ type: "EditTags", new_tags: e.detail.tags, id: e.detail.messageId });
   }
 
+  private editMessage(e: CustomEvent<{ messageId: number, message: string }>) {
+    this.socket.send({ type: "EditMessage", new_message: e.detail.message, id: e.detail.messageId });
+  }
+
   private deleteMessage(e: CustomEvent<{ messageId: number }>) {
     this.socket.send({ type: "DeleteMessage", id: e.detail.messageId });
   }
@@ -188,27 +192,28 @@ export class StcApp extends StyledElement {
                             html`
                               <message-list
                                 class="contents" .messages=${this.messages} .users=${[...this.users, { name: this.username, id: this.userId }]}
-                                @send-message=${this.sendMessage} @tags-changed=${this.editTags} .userId=${this.userId} @delete-message=${this.deleteMessage}
-                              ></message-list>
+                                @send-message=${this.sendMessage} @message-changed=${this.editMessage}
+                                @tags-changed=${this.editTags} .userId=${this.userId} @delete-message=${this.deleteMessage}
+                                ></message-list>
                             ` : html`
                               <welcome-message class="contents" .username=${this.username}></welcome-message>
                             `;
-      const contents = this.loggedIn ?
-                       html`
+    const contents = this.loggedIn ?
+                     html`
                        <side-bar
                          class="contents"
                          .groups=${this.groups} .users=${this.users} .currentRecipient=${this.currentRecipient}
                          @user-clicked=${(e: CustomEvent<{ id: number }>) => this.showRecepientMessages({ User: e.detail.id })}
                          @group-clicked=${(e: CustomEvent<{ id: number }>) => this.showRecepientMessages({ Group: e.detail.id })}
-                       ></side-bar>
+                         ></side-bar>
                        ${messageContents}
-                       ` :
-                       html`
-                         <h2 class="text-xl font-bold">Please log in:</h2>
-                         <form-input class="contents" label="Username" buttonLabel="Log in" @submit=${this.loginSubmit}></form-input>
-                       `;
-
-      return html`
+                     ` :
+                     html`
+                       <h2 class="text-xl font-bold">Please log in:</h2>
+                       <form-input class="contents" label="Username" buttonLabel="Log in" @submit=${this.loginSubmit}></form-input>
+                     `;
+    
+    return html`
       <hea-der .loggedIn=${this.loggedIn} .connected=${this.connected} .username=${this.username} ></hea-der>
       
       <div class="${classMap({ "flex": this.loggedIn, "p-3": !this.loggedIn })} grow relative min-h-0">
