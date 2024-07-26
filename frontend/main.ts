@@ -97,6 +97,42 @@ export class StcApp extends StyledElement {
     this.socket.send({ type: "DeleteMessage", id: e.detail.messageId });
   }
 
+  private parseMembers(members: string[], forceIncludeSelf: boolean) {
+    const m = new Set(members);
+    const memberIds = new Set<number>();
+    // add ourself
+    if (m.has(this.username) || forceIncludeSelf) {
+      memberIds.add(this.userId);
+    }
+    // add all other members
+    for (const user of this.users) {
+      if (m.has(user.name)) memberIds.add(user.id);
+    }
+    return [...memberIds];
+  }
+
+  private createGroup(e: CustomEvent<{ name: string, members: string[] }>) {
+    this.socket.send({
+      type: "CreateGroup",
+      name: e.detail.name,
+      // always include ourself when creating a group
+      members: this.parseMembers(e.detail.members, true)
+    });
+  }
+
+  private editGroup(e: CustomEvent<{ id: number, name: string, members: string[] }>) {
+    this.socket.send({
+      type: "EditGroup",
+      id: e.detail.id,
+      new_name: e.detail.name,
+      new_members: this.parseMembers(e.detail.members, false)
+    });
+  }
+
+  private deleteGroup(e: CustomEvent<{ id: number }>) {
+    this.socket.send({ type: "DeleteGroup", id: e.detail.id });
+  }
+
   private isForRecipient(msg: Message) {
     const r = msg.recipient;
     const cr = this.currentRecipient
@@ -205,6 +241,7 @@ export class StcApp extends StyledElement {
                          .groups=${this.groups} .users=${this.users} .currentRecipient=${this.currentRecipient}
                          @user-clicked=${(e: CustomEvent<{ id: number }>) => this.showRecepientMessages({ User: e.detail.id })}
                          @group-clicked=${(e: CustomEvent<{ id: number }>) => this.showRecepientMessages({ Group: e.detail.id })}
+                         @create-group=${this.createGroup} @edit-group=${this.editGroup} @delete-group=${this.deleteGroup}
                          ></side-bar>
                        ${messageContents}
                      ` :
