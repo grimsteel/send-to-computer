@@ -119,6 +119,7 @@ impl Store {
         Ok(Self { db })
     }
 
+    #[cfg(test)]
     pub fn get_username_for_id(&self, id: u16) -> Result<Option<String>> {
         let tx = self.db.begin_read()?;
         let users = ignore_nonexistent_table!(tx.open_table(USERS_TABLE), Ok(None))?;
@@ -170,11 +171,12 @@ impl Store {
         users: HashSet<u16>,
         group_id: Option<u16>,
         user_id: u16
-    ) -> Result<()> {
+    ) -> Result<u16> {
         let tx = self.db.begin_write()?;
+        let id;
         {
             let mut groups = tx.open_table(GROUPS_TABLE)?;
-            let group_id = if let Some(id) = group_id {
+            id = if let Some(id) = group_id {
                 // make sure this group exists and has the user in it
                 if let Some(group) = groups.get(id)? {
                     if !group.value().1.contains(&user_id) {
@@ -198,19 +200,22 @@ impl Store {
                 return Err(StoreError::InvalidUserIds);
             }
 
-            groups.insert(group_id, (name, users))?;
+            groups.insert(id, (name, users))?;
         }
         tx.commit()?;
-        Ok(())
+        Ok(id)
     }
 
-    pub fn delete_group(&self, group_id: u16, user_id: u16) -> Result<()> {
+    /// delete a group and return the members
+    pub fn delete_group(&self, group_id: u16, user_id: u16) -> Result<HashSet<u16>> {
         let tx = self.db.begin_write()?;
+        let group;
         {
             let mut groups = tx.open_table(GROUPS_TABLE)?;
-            if let Some(group) = groups.remove(group_id)? {
+            if let Some(group_guard) = groups.remove(group_id)? {
+                group = group_guard.value();
                 // make sure they are a member of this group
-                if !group.value().1.contains(&user_id) {
+                if !group.1.contains(&user_id) {
                     return Err(StoreError::PermissionDenied);
                 }
             } else {
@@ -233,7 +238,7 @@ impl Store {
             }
         }
         tx.commit()?;
-        Ok(())
+        Ok(group.1)
     }
 
     pub fn get_group_members(&self, group_id: u16) -> Result<Option<HashSet<u16>>> {

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Display, path::Path, sync::{Arc, RwLock}};
+use std::{collections::{HashMap, HashSet}, fmt::Display, path::Path, sync::{Arc, RwLock}};
 
 use axum::extract::ws::{self, WebSocket};
 use futures_util::StreamExt;
@@ -350,9 +350,107 @@ impl WsHandler {
                 } else {
                     warn!("Uninitialized user");
                 }
-            }
-            other => {
-                warn!("unimplemented: {other:?}");
+            },
+            ClientMessage::CreateGroup { name, members } => {
+                // they can't do this if they haven't initialized
+                if let Some(user_id) = self.user_id {
+                    let state = self.state.clone();
+                    
+                    let members: HashSet<_> = members.into_iter().collect();
+                    let name = name.to_owned();
+                    let name_2 = name.clone();
+                    let (id, members) = spawn_blocking(move || {
+                        // resolve the member usernames
+                        let users = state.store.list_users()?;
+                        let member_names = members
+                            .iter()
+                            .filter_map(|id| users.get(&id).map(Into::into))
+                            .collect();
+                        let group_id = state.store.create_update_group(name_2, members, None, user_id)?;
+                        
+                        store::Result::Ok((group_id, member_names))
+                    }).await??;
+                    // broadcast this message to all members
+                    let server_message = ServerMessage::GroupAdded { group: ServerGroup { name, id, members } };
+                    self.send_to_recipient(server_message, MessageRecipient::Group(id), user_id).await?;
+                } else {
+                    warn!("Uninitialized user");
+                }
+            },
+            ClientMessage::DeleteGroup { id } => {
+                // they can't do this if they haven't initialized
+                if let Some(user_id) = self.user_id {
+                    let state = self.state.clone();
+                    
+                    let members = spawn_blocking(move || state.store.delete_group(id, user_id)).await??;
+                    // broadcast this message to all members
+                    let server_message = ServerMessage::GroupDeleted { id };
+                    // send the message to each user in the group
+                    let users = self.state.users.read().unwrap();
+                    for member in members {
+                        if let Some(client) = users.get(&member) {
+                            client.send(server_message.clone())?;
+                        }
+                    }
+                } else {
+                    warn!("Uninitialized user");
+                }
+            },
+            ClientMessage::EditGroup { id, new_name, new_members } => {
+                // they can't do this if they haven't initialized
+                if let Some(user_id) = self.user_id {
+                    let state = self.state.clone();
+                    
+                    let members: HashSet<_> = new_members.into_iter().collect();
+                    let name = new_name.to_owned();
+                    let name_2 = name.clone();
+                    let (added, removed, retained, members) = spawn_blocking(move || {
+                        // resolve the member usernames
+                        let users = state.store.list_users()?;
+                        let member_names = members
+                            .iter()
+                            .filter_map(|id| users.get(&id).map(Into::into))
+                            .collect();
+
+                        // compute the difference in members
+                        let old_members = state.store.get_group_members(id)?
+                            .ok_or(StoreError::InvalidGroupId)?;
+
+                        let added: Vec<_> = members.difference(&old_members).copied().collect();
+                        let removed: Vec<_> = old_members.difference(&members).copied().collect();
+                        let retained: Vec<_> = members.intersection(&old_members).copied().collect();
+                        
+                        state.store.create_update_group(name_2, members, Some(id), user_id)?;
+                        
+                        store::Result::Ok((added, removed, retained, member_names))
+                    }).await??;
+
+                    let group = ServerGroup { name, id, members };
+                    let added_message = ServerMessage::GroupAdded { group: group.clone() };
+                    let removed_message = ServerMessage::GroupDeleted { id };
+                    let edited_message = ServerMessage::GroupEdited { group };
+                    
+                    // broadcast the appropriate message to all members
+                    let users = self.state.users.read().unwrap();
+
+                    for member in added {
+                        if let Some(client) = users.get(&member) {
+                            client.send(added_message.clone())?;
+                        }
+                    }
+                    for member in removed {
+                        if let Some(client) = users.get(&member) {
+                            client.send(removed_message.clone())?;
+                        }
+                    }
+                    for member in retained {
+                        if let Some(client) = users.get(&member) {
+                            client.send(edited_message.clone())?;
+                        }
+                    }
+                } else {
+                    warn!("Uninitialized user");
+                }
             }
         }
         Ok(())
