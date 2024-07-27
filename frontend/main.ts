@@ -182,6 +182,9 @@ export class StcApp extends StyledElement {
         const idx = this.groups.findIndex(el => el.id === msg.id);
         if (idx >= 0) {
           this.groups = this.groups.toSpliced(idx, 1);
+          if ("Group" in this.currentRecipient && this.currentRecipient.Group === msg.id) {
+            this.currentRecipient = null;
+          }
         }
         break;
       }
@@ -224,12 +227,20 @@ export class StcApp extends StyledElement {
   }
   
   render() {
-    const messageContents = this.currentRecipient ?
+    const rec = this.currentRecipient;
+    // title on the message list
+    const listTitle = rec ?
+                      ("User" in rec ?
+                       this.users.find(({ id }) => id === rec.User) :
+                       this.groups.find(({ id }) => id === rec.Group)
+                      )?.name ?? "" : "";
+    const messageContents = rec ?
                             html`
                               <message-list
                                 class="contents" .messages=${this.messages} .users=${[...this.users, { name: this.username, id: this.userId }]}
                                 @send-message=${this.sendMessage} @message-changed=${this.editMessage}
                                 @tags-changed=${this.editTags} .userId=${this.userId} @delete-message=${this.deleteMessage}
+                                .title=${listTitle}
                                 ></message-list>
                             ` : html`
                               <welcome-message class="contents" .username=${this.username}></welcome-message>

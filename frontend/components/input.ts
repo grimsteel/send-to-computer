@@ -1,6 +1,7 @@
 import { html } from "lit";
 import { StyledElement } from "../css";
 import { customElement, property, state } from "lit/decorators.js";
+import { live } from "lit/directives/live.js";
 
 @customElement("form-input")
 export default class FormInput extends StyledElement {
@@ -46,7 +47,7 @@ export default class FormInput extends StyledElement {
             ${this.label}
           </label>
           <textarea
-                id=${this.inputId} .value=${this.value}
+                id=${this.inputId} .value=${live(this.value)}
                 class="border text-sm rounded-lg block w-full p-2.5 bg-gray-700 border-gray-600 text-white focus:ring-orange-500 focus:border-orange-500" rows="1"
                 required="required" @change=${this.onChange} @keydown=${this.onKeydown}
           ></textarea>
