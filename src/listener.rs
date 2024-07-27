@@ -14,7 +14,7 @@ use hyper_util::{
 use log::{error, info};
 use tokio::{
     fs::remove_file,
-    net::{TcpListener, UnixListener},
+    net::{TcpListener, UnixListener}, select, signal::unix::{signal, SignalKind},
 };
 use tokio_util::net::Listener;
 use tower::Service;
@@ -109,22 +109,31 @@ where
             .socket_display()
     );
 
+    let mut term_signal = signal(SignalKind::terminate())?;
+
     loop {
-        let (socket, _addr) = listener.accept().await?;
-        let service = app.clone();
-        // new task for each connection
-        tokio::spawn(async move {
-            // setup the hyper socket and service
-            let socket = TokioIo::new(socket);
-            let hyper_service = service_fn(move |req| service.clone().call(req));
-            // serve the connection
-            if let Err(err) = ServerBuilder::new(TokioExecutor::new())
-                .serve_connection_with_upgrades(socket, hyper_service)
-                .await
-            {
-                error!("Failed to serve connection: {err}");
+        select! {
+            conn = listener.accept() => {
+                let (socket, _addr) = conn?;
+                let service = app.clone();
+                // new task for each connection
+                tokio::spawn(async move {
+                    // setup the hyper socket and service
+                    let socket = TokioIo::new(socket);
+                    let hyper_service = service_fn(move |req| service.clone().call(req));
+                    // serve the connection
+                    if let Err(err) = ServerBuilder::new(TokioExecutor::new())
+                        .serve_connection_with_upgrades(socket, hyper_service)
+                        .await
+                    {
+                        error!("Failed to serve connection: {err}");
+                    }
+                });
+            },
+            _ = term_signal.recv() => {
+                break Ok(());
             }
-        });
+        }
     }
 }
 

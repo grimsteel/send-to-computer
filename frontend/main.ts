@@ -271,3 +271,6 @@ export class StcApp extends StyledElement {
   }
 }
 
+if ("serviceWorker" in navigator)
+  navigator.serviceWorker.register("/service-worker.js");
+

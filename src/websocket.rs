@@ -2,7 +2,7 @@ use std::{collections::{HashMap, HashSet}, fmt::Display, path::Path, sync::{Arc,
 
 use axum::extract::ws::{self, WebSocket};
 use futures_util::StreamExt;
-use log::{debug, error, warn};
+use log::{error, warn};
 use rmp_serde::Serializer;
 use serde::{Deserialize, Serialize};
 use tokio::{select, sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender, error::SendError}, task::{spawn_blocking, JoinError}};
@@ -506,7 +506,6 @@ impl WsHandler {
 impl Drop for WsHandler {
     fn drop(&mut self) {
         // if this user had signed in successfully, we need to tell other clients they left
-        debug!("dropping {}", self.user_id.is_some());
         if let Some(id) = self.user_id {
             // remove this user
             {

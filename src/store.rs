@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, fmt::Display, path::Path};
+use std::{collections::{HashMap, HashSet}, fmt::Display, fs::OpenOptions, os::unix::fs::OpenOptionsExt, path::Path};
 
 use chrono::Utc;
 use redb::{
@@ -112,7 +112,13 @@ impl Store {
     /// initialize the store on the given path, or in memory if `path` is None
     pub fn init<P: AsRef<Path>>(path: Option<P>) -> Result<Self> {
         let db = if let Some(path) = path {
-            Database::create(path)?
+            let file = OpenOptions::new()
+                .write(true)
+                .read(true)
+                .create(true)
+                .mode(0o600)
+                .open(path)?;
+            Database::builder().create_file(file)?
         } else {
             Database::builder().create_with_backend(InMemoryBackend::new())?
         };
