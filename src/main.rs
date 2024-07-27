@@ -1,4 +1,4 @@
-use std::{env::args, sync::Arc};
+use std::{env::{self, args}, sync::Arc};
 
 use axum::{extract::{State, WebSocketUpgrade}, http::{header::ORIGIN, HeaderMap, StatusCode}, response::IntoResponse, routing::get, Router};
 use env_logger::Env;
@@ -18,9 +18,11 @@ const ALLOWED_ORIGINS: [&'static str; 2] = ["http://localhost:8080", "http://127
 async fn main() {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
 
+    let store_path = env::var("STC_STORE_PATH").ok();
+
     // store in memory for now
     // TODO: command line args
-    match WsState::new::<String>(None).map(Arc::new) {
+    match WsState::new::<String>(store_path).map(Arc::new) {
         Ok(ws_state) => {
             let app = Router::new()
                 .route("/socket", get(socket))
