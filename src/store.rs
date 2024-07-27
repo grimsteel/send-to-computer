@@ -1,4 +1,4 @@
-use std::{any::type_name, collections::{HashMap, HashSet}, fmt::Display, path::Path};
+use std::{collections::{HashMap, HashSet}, fmt::Display, path::Path};
 
 use chrono::Utc;
 use redb::{
@@ -9,9 +9,9 @@ use serde::{Deserialize, Serialize};
 
 /// adapted from https://github.com/cberner/redb/blob/master/examples/bincode_keys.rs
 #[derive(Debug)]
-struct MsgPackRedb<T>(T);
+struct MsgPackRedb<T, const N: char>(T);
 
-impl<T> Value for MsgPackRedb<T>
+impl<T, const N: char> Value for MsgPackRedb<T, N>
 where
     T: Serialize + for<'a> Deserialize<'a> + std::fmt::Debug {
     type SelfType<'a> = T where Self: 'a;
@@ -21,10 +21,10 @@ where
         rmp_serde::from_slice(data).unwrap()
     }
     fn as_bytes<'a, 'b: 'a>(value: &'a T) -> Vec<u8> { rmp_serde::to_vec(value).unwrap() }
-    fn type_name() -> TypeName { TypeName::new(&format!("MsgPackRedb<{}>", type_name::<T>())) }
+    fn type_name() -> TypeName { TypeName::new(&format!("MsgPackRedb<{}>", N)) }
 }
 
-impl<T> Key for MsgPackRedb<T>
+impl<T, const N: char> Key for MsgPackRedb<T, N>
 where
     T: Ord + std::fmt::Debug + Serialize + for<'a> Deserialize<'a> {
     fn compare(data1: &[u8], data2: &[u8]) -> std::cmp::Ordering {
@@ -50,13 +50,13 @@ pub struct Message {
 
 const USERS_TABLE: TableDefinition<u16, String> = TableDefinition::new("users");
 const USERS_TABLE_REVERSE: TableDefinition<&str, u16> = TableDefinition::new("users_reverse");
-const GROUPS_TABLE: TableDefinition<u16, (String, MsgPackRedb<HashSet<u16>>)> = TableDefinition::new("groups");
+const GROUPS_TABLE: TableDefinition<u16, (String, MsgPackRedb<HashSet<u16>, 'H'>)> = TableDefinition::new("groups");
 const MESSAGES_TABLE: TableDefinition<
     u16,
-    MsgPackRedb<Message>,
+    MsgPackRedb<Message, 'M'>,
 > = TableDefinition::new("messages");
 // (recipient, sender, message id)
-const MSG_ENDPOINT_TABLE: TableDefinition<(MsgPackRedb<MessageRecipient>, u16, u16), ()> =
+const MSG_ENDPOINT_TABLE: TableDefinition<(MsgPackRedb<MessageRecipient, 'R'>, u16, u16), ()> =
     TableDefinition::new("message_senders");
 
 #[derive(Debug)]
@@ -328,6 +328,28 @@ impl Store {
 
         tx.commit()?;
         Ok((id, message))
+    }
+
+    /// bypasses all restrictions
+    #[allow(dead_code)]
+    pub fn create_message(&self, message: Message) -> Result<()> {
+        let recipient = message.recipient;
+        let sender = message.sender;
+        
+        let tx = self.db.begin_write()?;
+        let mut messages = tx.open_table(MESSAGES_TABLE)?;
+        // add one to last key
+        let id = messages.last()?.map(|v| v.0.value() + 1).unwrap_or_default();
+        messages.insert(id, message.clone())?;
+        
+        // add it to the endpoints table
+        let mut msg_endpoints = tx.open_table(MSG_ENDPOINT_TABLE)?;
+        msg_endpoints.insert((recipient, sender, id), ())?;
+        
+        drop(messages);
+        drop(msg_endpoints);
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn edit_message(&self, message_id: u16, new_message: String, user_id: u16) -> Result<Option<Message>> {

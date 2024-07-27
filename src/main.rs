@@ -1,9 +1,9 @@
-use std::{env::{self, args}, sync::Arc};
+use std::{env::{self, args}, path::PathBuf, sync::Arc};
 
 use axum::{extract::{State, WebSocketUpgrade}, http::{header::ORIGIN, HeaderMap, StatusCode}, response::IntoResponse, routing::get, Router};
 use env_logger::Env;
 use listener::serve;
-use log::error;
+use log::{error, info};
 use tower_http::services::ServeDir;
 use websocket::{WsHandler, WsState};
 
@@ -18,11 +18,16 @@ const ALLOWED_ORIGINS: [&'static str; 2] = ["http://localhost:8080", "http://127
 async fn main() {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
 
-    let store_path = env::var("STC_STORE_PATH").ok();
+    let store_path = env::var("STC_STORE_PATH").ok().map(PathBuf::from);
+
+    if let Some(store_path) = &store_path {
+        info!("Using persistent store at {}", store_path.display());
+    } else {
+        info!("Using in-memory store");
+    }
 
     // store in memory for now
-    // TODO: command line args
-    match WsState::new::<String>(store_path).map(Arc::new) {
+    match WsState::new(store_path).map(Arc::new) {
         Ok(ws_state) => {
             let app = Router::new()
                 .route("/socket", get(socket))
