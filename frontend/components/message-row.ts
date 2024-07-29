@@ -62,7 +62,7 @@ export default class extends StyledElement {
         <!-- editable message -->
         <textarea
           style="overflow-wrap: break-word; field-sizing: content;" ${ref(this.messageInput)}
-          class="bg-transparent border-0 p-0 focus:text-orange-200 transition-colors focus:outline-0 focus:border-0 focus:ring-0 enabled:underline leading-none cursor-text min-w-0 grow me-auto" rows="1"
+          class="bg-transparent border-0 p-0 focus:text-orange-200 transition-colors focus:outline-0 focus:border-0 focus:ring-0 enabled:underline cursor-text min-w-0 grow me-auto" rows="1"
           ?disabled=${!this.editing} .value=${live(this.message)} wrap="soft"></textarea>
 
         ${editButton}
